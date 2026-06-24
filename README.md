@@ -139,6 +139,40 @@ All attributes share the same constructor overloads:
 
 // Keyed + explicit interface (.NET 8+)
 [Scoped(typeof(IMyService), Key = "keyName")]
+
+// Also register the concrete type alongside the interface(s)
+[Scoped(IncludeSelf = true)]
+```
+
+---
+
+## IncludeSelf — register as concrete type too
+
+When you want a class available both via its interface **and** directly by its concrete type, use `IncludeSelf = true`:
+
+```csharp
+[Scoped(IncludeSelf = true)]
+public class AnalyticsService : IAnalyticsService { }
+// → services.AddScoped<IAnalyticsService, AnalyticsService>();
+// → services.AddScoped<AnalyticsService>();   ← additional
+```
+
+### When is this useful?
+
+- **Decorator pattern** — the inner concrete type needs to be injectable separately
+- **Integration tests** — resolve the real implementation by type while still respecting interface registrations
+- **Mixed consumers** — one consumer needs `IAnalyticsService`; another needs `AnalyticsService` directly
+
+### With an explicit ServiceType
+
+`IncludeSelf = true` always adds the **concrete type**, regardless of how many interfaces were registered:
+
+```csharp
+[Scoped(typeof(INotificationService), IncludeSelf = true)]
+public class NotificationService : INotificationService, IEmailSender { }
+// → services.AddScoped<INotificationService, NotificationService>();
+// → services.AddScoped<NotificationService>();
+// IEmailSender is NOT registered — explicit ServiceType controls which interfaces win.
 ```
 
 ---
@@ -496,6 +530,9 @@ Works with ASP.NET Core, Worker Services, MAUI, Blazor, console apps — any pro
 ---
 
 ## FAQ
+
+**Q: Can I resolve a service by both its interface and its concrete type?**
+Yes — use `IncludeSelf = true`: `[Scoped(IncludeSelf = true)]`. AutoWire emits an extra `services.AddScoped<ConcreteType>()` in addition to the normal interface registrations. Useful for tests and the decorator pattern.
 
 **Q: Does it work with Worker Services and background jobs?**
 Yes — use `[HostedService]` on any class implementing `IHostedService` or extending `BackgroundService`. AutoWire generates `services.AddHostedService<T>()` and handles idempotency automatically.

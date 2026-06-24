@@ -82,6 +82,8 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                 public string? Key { get; set; }
                 /// <summary>Controls how duplicate registrations for the same service type are handled.</summary>
                 public DuplicateStrategy Duplicate { get; set; } = DuplicateStrategy.Add;
+                /// <summary>Also registers the concrete type itself in addition to the interface(s). Useful when you need to inject by concrete type in tests or internal code.</summary>
+                public bool IncludeSelf { get; set; }
                 /// <summary>Registers against all non-system interfaces the class implements (or as concrete type if none).</summary>
                 public ScopedAttribute() { }
                 /// <summary>Registers against the specified service type only.</summary>
@@ -98,6 +100,8 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                 public string? Key { get; set; }
                 /// <summary>Controls how duplicate registrations for the same service type are handled.</summary>
                 public DuplicateStrategy Duplicate { get; set; } = DuplicateStrategy.Add;
+                /// <summary>Also registers the concrete type itself in addition to the interface(s). Useful when you need to inject by concrete type in tests or internal code.</summary>
+                public bool IncludeSelf { get; set; }
                 /// <summary>Registers against all non-system interfaces the class implements (or as concrete type if none).</summary>
                 public SingletonAttribute() { }
                 /// <summary>Registers against the specified service type only.</summary>
@@ -114,6 +118,8 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                 public string? Key { get; set; }
                 /// <summary>Controls how duplicate registrations for the same service type are handled.</summary>
                 public DuplicateStrategy Duplicate { get; set; } = DuplicateStrategy.Add;
+                /// <summary>Also registers the concrete type itself in addition to the interface(s). Useful when you need to inject by concrete type in tests or internal code.</summary>
+                public bool IncludeSelf { get; set; }
                 /// <summary>Registers against all non-system interfaces the class implements (or as concrete type if none).</summary>
                 public TransientAttribute() { }
                 /// <summary>Registers against the specified service type only.</summary>
@@ -132,6 +138,8 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                 public Type? ServiceType { get; }
                 /// <summary>Optional keyed-service key. Requires .NET 8+ / Microsoft.Extensions.DependencyInjection 8+.</summary>
                 public string? Key { get; set; }
+                /// <summary>Also registers the concrete type itself in addition to the interface(s). Useful when you need to inject by concrete type in tests or internal code.</summary>
+                public bool IncludeSelf { get; set; }
                 public TryScopedAttribute() { }
                 public TryScopedAttribute(Type serviceType) { ServiceType = serviceType; }
             }
@@ -148,6 +156,8 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                 public Type? ServiceType { get; }
                 /// <summary>Optional keyed-service key. Requires .NET 8+ / Microsoft.Extensions.DependencyInjection 8+.</summary>
                 public string? Key { get; set; }
+                /// <summary>Also registers the concrete type itself in addition to the interface(s). Useful when you need to inject by concrete type in tests or internal code.</summary>
+                public bool IncludeSelf { get; set; }
                 public TrySingletonAttribute() { }
                 public TrySingletonAttribute(Type serviceType) { ServiceType = serviceType; }
             }
@@ -164,6 +174,8 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                 public Type? ServiceType { get; }
                 /// <summary>Optional keyed-service key. Requires .NET 8+ / Microsoft.Extensions.DependencyInjection 8+.</summary>
                 public string? Key { get; set; }
+                /// <summary>Also registers the concrete type itself in addition to the interface(s). Useful when you need to inject by concrete type in tests or internal code.</summary>
+                public bool IncludeSelf { get; set; }
                 public TryTransientAttribute() { }
                 public TryTransientAttribute(Type serviceType) { ServiceType = serviceType; }
             }
@@ -507,6 +519,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
 
         string? key = null;
         var duplicateStrategy = defaultStrategy;
+        var includeSelf = false;
 
         foreach (var namedArg in attr.NamedArguments)
         {
@@ -514,6 +527,8 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                 key = k;
             else if (namedArg.Key == "Duplicate" && namedArg.Value.Value is int d)
                 duplicateStrategy = (DuplicateStrategy)d;
+            else if (namedArg.Key == "IncludeSelf" && namedArg.Value.Value is bool b)
+                includeSelf = b;
         }
 
         // ── Open generic path ─────────────────────────────────────────────────
@@ -543,7 +558,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                     serviceTypes.Add(implName);
             }
 
-            return new RegistrationInfo(implName, serviceTypes.ToImmutableArray(), lifetime, key, true, duplicateStrategy);
+            return new RegistrationInfo(implName, serviceTypes.ToImmutableArray(), lifetime, key, true, duplicateStrategy, includeSelf);
         }
 
         // ── Closed type path ──────────────────────────────────────────────────
@@ -571,7 +586,8 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             lifetime,
             key,
             false,
-            duplicateStrategy);
+            duplicateStrategy,
+            includeSelf);
     }
 
     // ── Code generation ────────────────────────────────────────────────────────
@@ -611,6 +627,10 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
         {
             foreach (var svc in reg.ServiceTypes)
                 EmitLine(sb, reg, svc);
+
+            // IncludeSelf: also register as concrete type when not already a self-only registration.
+            if (reg.IncludeSelf && !reg.ServiceTypes.Contains(reg.ImplementationType))
+                EmitLine(sb, reg, reg.ImplementationType);
         }
 
         // ── Decorators (always after normal registrations so the inner service is present) ──

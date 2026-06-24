@@ -113,4 +113,24 @@ public class TestBackgroundWorker : BackgroundService
     protected override Task ExecuteAsync(CancellationToken stoppingToken) => Task.CompletedTask;
 }
 
+// ── IncludeSelf: registers as both interface and concrete type ────────────────
+
+public interface IAnalyticsService { string Track(); }
+[Scoped(IncludeSelf = true)]
+public class AnalyticsService : IAnalyticsService
+{
+    public string Track() => "tracked";
+}
+
+// ── IncludeSelf with explicit ServiceType ─────────────────────────────────────
+
+public interface INotificationService { void Notify(); }
+public interface IEmailSender { void Send(); }
+[Scoped(typeof(INotificationService), IncludeSelf = true)]
+public class NotificationService : INotificationService, IEmailSender
+{
+    public void Notify() { }
+    public void Send() { }
+}
+
 
