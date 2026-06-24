@@ -224,3 +224,23 @@ public class EnvConfigReader : IConfigReader
 {
     public string Read(string key) => $"env:{key}";
 }
+
+// ── [Conditional]: wraps registration in #if SYMBOL ──────────────────────────
+
+public interface IDebugService { string GetInfo(); }
+
+[Scoped(Condition = "DEBUG")]
+public class DebugInfoService : IDebugService
+{
+    public string GetInfo() => "debug-info";
+}
+
+// ── IncludeLazy: registers Lazy<T> alongside the main registration ─────────────
+
+public interface IHeavyService { string Load(); }
+
+[Singleton(IncludeLazy = true)]
+public class HeavyService : IHeavyService
+{
+    public string Load() => "loaded";
+}

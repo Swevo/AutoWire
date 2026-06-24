@@ -134,9 +134,19 @@ public class CheckoutController(IOrderService orders, ICache cache)
 | `[TrySingleton]` | Singleton | `services.TryAddSingleton<TService, TImpl>()` |
 | `[TryTransient]` | Transient | `services.TryAddTransient<TService, TImpl>()` |
 | `[HostedService]` | Singleton | `services.AddHostedService<T>()` |
-| `[Factory(typeof(IFoo))]` | Singleton (factory) + Scoped (product) | `services.AddSingleton<FooFactory>()` + `services.AddScoped<IFoo>(sp => sp.GetRequiredService<FooFactory>().Create())` |
+| `[Factory(typeof(IFoo))]` | Singleton (factory) + Scoped (product) | `services.AddSingleton<FooFactory>()` + `services.AddScoped<IFoo>(sp => ...)` |
 
-All attributes share the same constructor overloads:
+All attributes (except `[HostedService]` and `[Factory]`) support these shared properties:
+
+| Property | Type | Description |
+|---|---|---|
+| `ServiceType` | `Type?` | Explicit service type. Default: all non-system interfaces |
+| `Key` | `string?` | Keyed service key (.NET 8+) |
+| `Duplicate` | `DuplicateStrategy` | `Add` / `Skip` / `Replace` |
+| `IncludeSelf` | `bool` | Also register as concrete type |
+| `Profile` | `string?` | Only register when profile matches |
+| `Condition` | `string?` | Wrap in `#if SYMBOL ... #endif` at compile time |
+| `IncludeLazy` | `bool` | Also register `Lazy<T>` via `AddTransient` |
 
 ```csharp
 // Auto-discover all non-system interfaces
@@ -364,6 +374,65 @@ public class ReportingService
 ```
 
 AW004 covers both `[Singleton]` and `[TrySingleton]`, and detects scoped services registered via `[Scoped]` or `[TryScoped]`.
+
+---
+
+## Compile-time conditional — `Condition`
+
+Use `Condition` to gate a registration behind a preprocessor symbol. AutoWire wraps the generated line(s) in `#if ... #endif`:
+
+```csharp
+// Only registered in DEBUG builds
+[Scoped(Condition = "DEBUG")]
+public class MockEmailService : IEmailService { }
+
+// Only registered when FEATURE_REDIS is defined
+[Singleton(typeof(ICacheService), Condition = "FEATURE_REDIS")]
+public class RedisCache : ICacheService { }
+```
+
+Generated output:
+
+```csharp
+#if DEBUG
+services.AddScoped<IEmailService, MockEmailService>();
+#endif
+
+#if FEATURE_REDIS
+services.AddSingleton<ICacheService, RedisCache>();
+#endif
+```
+
+`Condition` combines naturally with `Profile`:
+
+```csharp
+[Scoped(Profile = "staging", Condition = "DEBUG")]
+public class StagingMockService : IMyService { }
+// → only registered when profile == "staging" AND DEBUG is defined
+```
+
+---
+
+## Lazy dependencies — `IncludeLazy`
+
+Use `IncludeLazy = true` to also register `Lazy<T>` so that services can take optional or deferred dependencies:
+
+```csharp
+[Singleton(IncludeLazy = true)]
+public class HeavyService : IHeavyService { }
+// Generates:
+// services.AddSingleton<IHeavyService, HeavyService>();
+// services.AddTransient<Lazy<IHeavyService>>(sp => new Lazy<IHeavyService>(() => sp.GetRequiredService<IHeavyService>()));
+```
+
+Consumers can then inject `Lazy<IHeavyService>` to defer instantiation until first use:
+
+```csharp
+public class ReportController(Lazy<IHeavyService> heavy)
+{
+    public void OnDemand() => heavy.Value.Load();
+}
+```
 
 ---
 

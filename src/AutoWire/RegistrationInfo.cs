@@ -14,6 +14,8 @@ internal sealed class RegistrationInfo
     public bool IncludeSelf { get; }
     public string? Profile { get; }
     public bool IsScanned { get; }
+    public string? Condition { get; }
+    public bool IncludeLazy { get; }
 
     public RegistrationInfo(
         string implementationType,
@@ -24,7 +26,9 @@ internal sealed class RegistrationInfo
         DuplicateStrategy duplicateStrategy = DuplicateStrategy.Add,
         bool includeSelf = false,
         string? profile = null,
-        bool isScanned = false)
+        bool isScanned = false,
+        string? condition = null,
+        bool includeLazy = false)
     {
         ImplementationType = implementationType;
         ServiceTypes = serviceTypes;
@@ -35,6 +39,8 @@ internal sealed class RegistrationInfo
         IncludeSelf = includeSelf;
         Profile = profile;
         IsScanned = isScanned;
+        Condition = condition;
+        IncludeLazy = includeLazy;
     }
 
     public override bool Equals(object? obj) =>
@@ -47,7 +53,9 @@ internal sealed class RegistrationInfo
         DuplicateStrategy == other.DuplicateStrategy &&
         IncludeSelf == other.IncludeSelf &&
         Profile == other.Profile &&
-        IsScanned == other.IsScanned;
+        IsScanned == other.IsScanned &&
+        Condition == other.Condition &&
+        IncludeLazy == other.IncludeLazy;
 
     public override int GetHashCode()
     {
@@ -61,6 +69,8 @@ internal sealed class RegistrationInfo
             h = h * 397 ^ IncludeSelf.GetHashCode();
             h = h * 397 ^ (Profile?.GetHashCode() ?? 0);
             h = h * 397 ^ IsScanned.GetHashCode();
+            h = h * 397 ^ (Condition?.GetHashCode() ?? 0);
+            h = h * 397 ^ IncludeLazy.GetHashCode();
             foreach (var s in ServiceTypes)
                 h = h * 397 ^ s.GetHashCode();
             return h;

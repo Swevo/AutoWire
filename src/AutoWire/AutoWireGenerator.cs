@@ -107,13 +107,15 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                 public bool IncludeSelf { get; set; }
                 /// <summary>Only registers this service when <c>AddAutoWireServices(profile: "...")</c> is called with a matching profile. When null, the service is always registered.</summary>
                 public string? Profile { get; set; }
+                /// <summary>When set, wraps the registration in a <c>#if SYMBOL ... #endif</c> preprocessor block. Example: <c>Condition = "DEBUG"</c>.</summary>
+                public string? Condition { get; set; }
+                /// <summary>Also registers <c>Lazy&lt;T&gt;</c> via <c>AddTransient</c> so consumers can take a lazy dependency on this service.</summary>
+                public bool IncludeLazy { get; set; }
                 /// <summary>Registers against all non-system interfaces the class implements (or as concrete type if none).</summary>
                 public ScopedAttribute() { }
                 /// <summary>Registers against the specified service type only.</summary>
                 public ScopedAttribute(Type serviceType) { ServiceType = serviceType; }
             }
-
-            /// <summary>Registers the decorated class as a <b>singleton</b> service via AutoWire source generation.</summary>
             [AttributeUsage(AttributeTargets.Class, AllowMultiple = true, Inherited = false)]
             public sealed class SingletonAttribute : Attribute
             {
@@ -127,6 +129,10 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                 public bool IncludeSelf { get; set; }
                 /// <summary>Only registers this service when <c>AddAutoWireServices(profile: "...")</c> is called with a matching profile. When null, the service is always registered.</summary>
                 public string? Profile { get; set; }
+                /// <summary>When set, wraps the registration in a <c>#if SYMBOL ... #endif</c> preprocessor block.</summary>
+                public string? Condition { get; set; }
+                /// <summary>Also registers <c>Lazy&lt;T&gt;</c> via <c>AddTransient</c> so consumers can take a lazy dependency on this service.</summary>
+                public bool IncludeLazy { get; set; }
                 /// <summary>Registers against all non-system interfaces the class implements (or as concrete type if none).</summary>
                 public SingletonAttribute() { }
                 /// <summary>Registers against the specified service type only.</summary>
@@ -147,6 +153,10 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                 public bool IncludeSelf { get; set; }
                 /// <summary>Only registers this service when <c>AddAutoWireServices(profile: "...")</c> is called with a matching profile. When null, the service is always registered.</summary>
                 public string? Profile { get; set; }
+                /// <summary>When set, wraps the registration in a <c>#if SYMBOL ... #endif</c> preprocessor block.</summary>
+                public string? Condition { get; set; }
+                /// <summary>Also registers <c>Lazy&lt;T&gt;</c> via <c>AddTransient</c> so consumers can take a lazy dependency on this service.</summary>
+                public bool IncludeLazy { get; set; }
                 /// <summary>Registers against all non-system interfaces the class implements (or as concrete type if none).</summary>
                 public TransientAttribute() { }
                 /// <summary>Registers against the specified service type only.</summary>
@@ -169,6 +179,10 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                 public bool IncludeSelf { get; set; }
                 /// <summary>Only registers this service when <c>AddAutoWireServices(profile: "...")</c> is called with a matching profile. When null, the service is always registered.</summary>
                 public string? Profile { get; set; }
+                /// <summary>When set, wraps the registration in a <c>#if SYMBOL ... #endif</c> preprocessor block.</summary>
+                public string? Condition { get; set; }
+                /// <summary>Also registers <c>Lazy&lt;T&gt;</c> via <c>AddTransient</c> so consumers can take a lazy dependency on this service.</summary>
+                public bool IncludeLazy { get; set; }
                 public TryScopedAttribute() { }
                 public TryScopedAttribute(Type serviceType) { ServiceType = serviceType; }
             }
@@ -189,6 +203,10 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                 public bool IncludeSelf { get; set; }
                 /// <summary>Only registers this service when <c>AddAutoWireServices(profile: "...")</c> is called with a matching profile. When null, the service is always registered.</summary>
                 public string? Profile { get; set; }
+                /// <summary>When set, wraps the registration in a <c>#if SYMBOL ... #endif</c> preprocessor block.</summary>
+                public string? Condition { get; set; }
+                /// <summary>Also registers <c>Lazy&lt;T&gt;</c> via <c>AddTransient</c> so consumers can take a lazy dependency on this service.</summary>
+                public bool IncludeLazy { get; set; }
                 public TrySingletonAttribute() { }
                 public TrySingletonAttribute(Type serviceType) { ServiceType = serviceType; }
             }
@@ -209,6 +227,10 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                 public bool IncludeSelf { get; set; }
                 /// <summary>Only registers this service when <c>AddAutoWireServices(profile: "...")</c> is called with a matching profile. When null, the service is always registered.</summary>
                 public string? Profile { get; set; }
+                /// <summary>When set, wraps the registration in a <c>#if SYMBOL ... #endif</c> preprocessor block.</summary>
+                public string? Condition { get; set; }
+                /// <summary>Also registers <c>Lazy&lt;T&gt;</c> via <c>AddTransient</c> so consumers can take a lazy dependency on this service.</summary>
+                public bool IncludeLazy { get; set; }
                 public TryTransientAttribute() { }
                 public TryTransientAttribute(Type serviceType) { ServiceType = serviceType; }
             }
@@ -930,6 +952,8 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
         var duplicateStrategy = defaultStrategy;
         var includeSelf = false;
         string? profile = null;
+        string? condition = null;
+        var includeLazy = false;
 
         foreach (var namedArg in attr.NamedArguments)
         {
@@ -941,6 +965,10 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                 includeSelf = b;
             else if (namedArg.Key == "Profile" && namedArg.Value.Value is string p)
                 profile = p;
+            else if (namedArg.Key == "Condition" && namedArg.Value.Value is string c)
+                condition = c;
+            else if (namedArg.Key == "IncludeLazy" && namedArg.Value.Value is bool il)
+                includeLazy = il;
         }
 
         // ── Open generic path ─────────────────────────────────────────────────
@@ -970,7 +998,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                     serviceTypes.Add(implName);
             }
 
-            return new RegistrationInfo(implName, serviceTypes.ToImmutableArray(), lifetime, key, true, duplicateStrategy, includeSelf, profile);
+            return new RegistrationInfo(implName, serviceTypes.ToImmutableArray(), lifetime, key, true, duplicateStrategy, includeSelf, profile, isScanned: false, condition, includeLazy);
         }
 
         // ── Closed type path ──────────────────────────────────────────────────
@@ -1000,7 +1028,10 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             false,
             duplicateStrategy,
             includeSelf,
-            profile);
+            profile,
+            isScanned: false,
+            condition,
+            includeLazy);
     }
 
     // ── Code generation ────────────────────────────────────────────────────────
@@ -1044,11 +1075,16 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             .ThenBy(static r => r.Lifetime)
             .ThenBy(static r => r.ImplementationType))
         {
+            if (reg.Condition is not null) sb.AppendLine($"#if {reg.Condition}");
             foreach (var svc in reg.ServiceTypes)
+            {
                 EmitLine(sb, reg, svc);
-
+                if (reg.IncludeLazy && !reg.IsOpenGeneric)
+                    sb.AppendLine($"        services.AddTransient<global::System.Lazy<{svc}>>(sp => new global::System.Lazy<{svc}>(() => sp.GetRequiredService<{svc}>()));");
+            }
             if (reg.IncludeSelf && !reg.ServiceTypes.Contains(reg.ImplementationType))
                 EmitLine(sb, reg, reg.ImplementationType);
+            if (reg.Condition is not null) sb.AppendLine($"#endif");
         }
 
         // ── Profile-conditional registrations ─────────────────────────────────
@@ -1070,11 +1106,16 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                 .ThenBy(static r => r.Lifetime)
                 .ThenBy(static r => r.ImplementationType))
             {
+                if (reg.Condition is not null) sb.AppendLine($"#if {reg.Condition}");
                 foreach (var svc in reg.ServiceTypes)
+                {
                     EmitLine(sb, reg, svc, "            ");
-
+                    if (reg.IncludeLazy && !reg.IsOpenGeneric)
+                        sb.AppendLine($"            services.AddTransient<global::System.Lazy<{svc}>>(sp => new global::System.Lazy<{svc}>(() => sp.GetRequiredService<{svc}>()));");
+                }
                 if (reg.IncludeSelf && !reg.ServiceTypes.Contains(reg.ImplementationType))
                     EmitLine(sb, reg, reg.ImplementationType, "            ");
+                if (reg.Condition is not null) sb.AppendLine($"#endif");
             }
             sb.AppendLine("        }");
         }
