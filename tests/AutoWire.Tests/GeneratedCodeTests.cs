@@ -435,4 +435,49 @@ public class GeneratedCodeTests
         Assert.NotNull(sub);
         Assert.IsType<AutoWireTests.Scan.Sub.SubScanServiceX>(sub);
     }
+
+    // ── [Factory] tests ────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Factory_RegistersProductType_ViaDelegate()
+    {
+        using var provider = BuildProvider();
+        using var scope = provider.CreateScope();
+        var conn = scope.ServiceProvider.GetService<IConnection>();
+        Assert.NotNull(conn);
+        Assert.IsType<SqliteConnection>(conn);
+        Assert.Equal("Data Source=:memory:", conn!.ConnectionString);
+    }
+
+    [Fact]
+    public void Factory_FactoryClass_IsRegisteredAsSingleton()
+    {
+        using var provider = BuildProvider();
+        var f1 = provider.GetService<ConnectionFactory>();
+        var f2 = provider.GetService<ConnectionFactory>();
+        Assert.NotNull(f1);
+        Assert.Same(f1, f2);
+    }
+
+    [Fact]
+    public void Factory_ProductLifetime_Scoped_DifferentInstancesAcrossScopes()
+    {
+        using var provider = BuildProvider();
+        IConnection? c1, c2;
+        using (var scope1 = provider.CreateScope())
+            c1 = scope1.ServiceProvider.GetRequiredService<IConnection>();
+        using (var scope2 = provider.CreateScope())
+            c2 = scope2.ServiceProvider.GetRequiredService<IConnection>();
+        Assert.NotSame(c1, c2);
+    }
+
+    [Fact]
+    public void Factory_ProductLifetime_Singleton_SameInstanceEverywhere()
+    {
+        using var provider = BuildProvider();
+        var r1 = provider.GetService<IConfigReader>();
+        var r2 = provider.GetService<IConfigReader>();
+        Assert.NotNull(r1);
+        Assert.Same(r1, r2);
+    }
 }
