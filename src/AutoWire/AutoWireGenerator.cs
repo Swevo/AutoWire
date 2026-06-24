@@ -206,6 +206,8 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             public sealed class DecorateScopedAttribute : Attribute
             {
                 public Type ServiceType { get; }
+                /// <summary>Controls the order in which decorators are applied when multiple decorators target the same service type. Lower values are applied first (closer to the inner service). Default is 0.</summary>
+                public int Order { get; set; }
                 public DecorateScopedAttribute(Type serviceType) { ServiceType = serviceType; }
             }
 
@@ -214,6 +216,8 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             public sealed class DecorateSingletonAttribute : Attribute
             {
                 public Type ServiceType { get; }
+                /// <summary>Controls the order in which decorators are applied when multiple decorators target the same service type. Lower values are applied first (closer to the inner service). Default is 0.</summary>
+                public int Order { get; set; }
                 public DecorateSingletonAttribute(Type serviceType) { ServiceType = serviceType; }
             }
 
@@ -222,6 +226,8 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             public sealed class DecorateTransientAttribute : Attribute
             {
                 public Type ServiceType { get; }
+                /// <summary>Controls the order in which decorators are applied when multiple decorators target the same service type. Lower values are applied first (closer to the inner service). Default is 0.</summary>
+                public int Order { get; set; }
                 public DecorateTransientAttribute(Type serviceType) { ServiceType = serviceType; }
             }
 
@@ -574,10 +580,17 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
         {
             if (attr.ConstructorArguments.Length == 0) continue;
             if (attr.ConstructorArguments[0].Value is not ITypeSymbol serviceType) continue;
+
+            var order = 0;
+            foreach (var namedArg in attr.NamedArguments)
+                if (namedArg.Key == "Order" && namedArg.Value.Value is int o)
+                    order = o;
+
             builder.Add(new DecoratorInfo(
                 ToFullyQualified(classSymbol),
                 ToFullyQualified(serviceType),
-                lifetime));
+                lifetime,
+                order));
         }
         return builder.ToImmutable();
     }
@@ -757,11 +770,23 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                     if (svc != reg.ImplementationType)
                         serviceToConcreteMap[svc] = reg.ImplementationType;
 
+            // Group by (Lifetime, ServiceType) so multiple decorators targeting the same service
+            // are emitted as a single chain sorted by Order (lowest = innermost).
+            var groups = new Dictionary<string, List<DecoratorInfo>>(StringComparer.Ordinal);
+            foreach (var dec in decorators)
+            {
+                var key = dec.Lifetime + "::" + dec.ServiceType;
+                if (!groups.TryGetValue(key, out var list))
+                    groups[key] = list = new List<DecoratorInfo>();
+                list.Add(dec);
+            }
+
             var idx = 0;
-            foreach (var dec in decorators.OrderBy(static d => d.Lifetime).ThenBy(static d => d.DecoratorType))
+            foreach (var kvp in groups.OrderBy(static g => g.Key))
             {
                 sb.AppendLine();
-                EmitDecorator(sb, dec, serviceToConcreteMap, idx++);
+                var chain = kvp.Value.OrderBy(static d => d.Order).ThenBy(static d => d.DecoratorType).ToList();
+                EmitDecoratorChain(sb, chain, serviceToConcreteMap, ref idx);
             }
         }
 
@@ -777,6 +802,52 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
         sb.AppendLine("    }");
         sb.AppendLine("}");
         return sb.ToString();
+    }
+
+    private static void EmitDecoratorChain(
+        StringBuilder sb,
+        List<DecoratorInfo> chain,
+        Dictionary<string, string> serviceToConcreteMap,
+        ref int idx)
+    {
+        var serviceType = chain[0].ServiceType;
+        var lifetime    = chain[0].Lifetime;
+
+        sb.AppendLine($"        // [Decorate{lifetime}] chain for {serviceType} ({chain.Count} decorator(s), innermost first by Order)");
+
+        if (serviceToConcreteMap.TryGetValue(serviceType, out var originalConcrete))
+        {
+            // Compile-time known inner type — emit the full chain type-safely.
+            // chain[0] = innermost (lowest Order), chain[^1] = outermost (highest Order) → registered as IService.
+            sb.AppendLine($"        services.RemoveAll<{serviceType}>();");
+            sb.AppendLine($"        services.Add{lifetime}<{originalConcrete}>();");
+
+            var previousType = originalConcrete;
+            for (var i = 0; i < chain.Count - 1; i++)
+            {
+                var dec = chain[i];
+                sb.AppendLine($"        services.Add{lifetime}<{dec.DecoratorType}>(sp =>");
+                sb.AppendLine($"            ({dec.DecoratorType})global::Microsoft.Extensions.DependencyInjection.ActivatorUtilities.CreateInstance(");
+                sb.AppendLine($"                sp, typeof({dec.DecoratorType}), sp.GetRequiredService<{previousType}>()));");
+                previousType = dec.DecoratorType;
+            }
+
+            var last = chain[chain.Count - 1];
+            sb.AppendLine($"        services.Add{lifetime}<{serviceType}>(sp =>");
+            sb.AppendLine($"            ({serviceType})global::Microsoft.Extensions.DependencyInjection.ActivatorUtilities.CreateInstance(");
+            sb.AppendLine($"                sp, typeof({last.DecoratorType}), sp.GetRequiredService<{previousType}>()));");
+        }
+        else
+        {
+            // Runtime fallback — apply decorators sequentially.
+            // Each EmitDecorator call will self-register the prior concrete type, enabling the next in the chain to find it.
+            foreach (var dec in chain)
+            {
+                EmitDecorator(sb, dec, serviceToConcreteMap, idx++);
+                // After the first decorator, the concrete type it self-registered becomes the new inner for the next.
+                serviceToConcreteMap[dec.ServiceType] = dec.DecoratorType;
+            }
+        }
     }
 
     private static void EmitDecorator(

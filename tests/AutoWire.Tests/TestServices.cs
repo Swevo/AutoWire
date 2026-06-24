@@ -133,4 +133,32 @@ public class NotificationService : INotificationService, IEmailSender
     public void Send() { }
 }
 
+// ── Ordered decorators: two decorators on ILogService with explicit Order ─────
+
+public interface ILogService { string Log(string msg); }
+
+[Scoped]
+public class SimpleLogService : ILogService
+{
+    public string Log(string msg) => $"[LOG] {msg}";
+}
+
+/// <summary>Order = 1 → inner decorator (wraps SimpleLogService directly).</summary>
+[DecorateScoped(typeof(ILogService), Order = 1)]
+public class TimestampLogDecorator : ILogService
+{
+    private readonly ILogService _inner;
+    public TimestampLogDecorator(ILogService inner) { _inner = inner; }
+    public string Log(string msg) => _inner.Log($"[TS] {msg}");
+}
+
+/// <summary>Order = 2 → outer decorator (wraps TimestampLogDecorator, exposes ILogService).</summary>
+[DecorateScoped(typeof(ILogService), Order = 2)]
+public class UpperCaseLogDecorator : ILogService
+{
+    private readonly ILogService _inner;
+    public UpperCaseLogDecorator(ILogService inner) { _inner = inner; }
+    public string Log(string msg) => _inner.Log(msg).ToUpper();
+}
+
 

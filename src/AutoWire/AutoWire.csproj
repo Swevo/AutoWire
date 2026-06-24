@@ -8,7 +8,7 @@
     <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
 
     <PackageId>AutoWire</PackageId>
-    <Version>1.7.0</Version>
+    <Version>1.8.0</Version>
     <Authors>Justin Bannister</Authors>
     <Copyright>Copyright (c) 2025 Justin Bannister</Copyright>
     <Description>Compile-time dependency injection auto-registration for .NET using Roslyn source generators. Add [Scoped], [Singleton], or [Transient] to your classes — AutoWire generates IServiceCollection registration code at build time. Zero runtime overhead, no reflection, no startup cost. Supports keyed services (.NET 8+) and works with ASP.NET Core, Worker Services, MAUI, and any Microsoft.Extensions.DependencyInjection project.</Description>
@@ -25,7 +25,7 @@
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     <Deterministic>true</Deterministic>
     <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
-    <PackageReleaseNotes>1.7.0: AW004 Warning diagnostic — detects captive dependencies where a [Singleton] injects a [Scoped] service at compile time. Covers [Singleton]/[TrySingleton] and [Scoped]/[TryScoped] registrations. 1.6.0: IncludeSelf = true property on [Scoped/Singleton/Transient/TryScoped/TrySingleton/TryTransient] — registers the concrete type alongside interface(s) for test injection and decorator scenarios. 1.5.0: [HostedService] attribute generates AddHostedService&lt;T&gt;() — zero-boilerplate Worker Service registration. AW003 Error diagnostic: compile-time error when explicit ServiceType isn't implemented by the decorated class. 1.4.0: Decorator support — [DecorateScoped/Singleton/Transient]. 1.3.0: AllowMultiple, DuplicateStrategy, [TryScoped/TrySingleton/TryTransient], AW001+AW002. 1.2.0: Open generics + AutoWireOptions. 1.0.0: Initial release.</PackageReleaseNotes>
+    <PackageReleaseNotes>1.8.0: Ordered decorator stacking — Order property on [DecorateScoped/Singleton/Transient] controls which decorator is innermost vs outermost when multiple decorators target the same service type. All intermediate concrete types are self-registered for direct injection. 1.7.0: AW004 Warning diagnostic — captive dependency detection. 1.6.0: IncludeSelf = true. 1.5.0: [HostedService] + AW003. 1.4.0: Decorator support. 1.3.0: AllowMultiple, DuplicateStrategy, TryX, AW001+AW002. 1.2.0: Open generics + AutoWireOptions. 1.0.0: Initial release.</PackageReleaseNotes>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.*" PrivateAssets="all" />
