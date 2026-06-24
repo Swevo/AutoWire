@@ -161,4 +161,37 @@ public class UpperCaseLogDecorator : ILogService
     public string Log(string msg) => _inner.Log(msg).ToUpper();
 }
 
+// ── Profile-based registration ────────────────────────────────────────────────
+
+public interface IStorageService { string Store(string data); }
+
+/// <summary>Always-registered default storage (no profile).</summary>
+[Scoped]
+public class InMemoryStorageService : IStorageService
+{
+    public string Store(string data) => $"memory:{data}";
+}
+
+/// <summary>Only registered when profile == "cloud".</summary>
+[Scoped(Profile = "cloud")]
+public class CloudStorageService : IStorageService
+{
+    public string Store(string data) => $"cloud:{data}";
+}
+
+/// <summary>Only registered when profile == "azure".</summary>
+[Scoped(Profile = "azure")]
+public class AzureStorageService : IStorageService
+{
+    public string Store(string data) => $"azure:{data}";
+}
+
+/// <summary>Registered under profile "cloud" with no matching interface — self-registration.</summary>
+public interface IMetricsService { string Measure(); }
+[Singleton(Profile = "cloud")]
+public class CloudMetricsService : IMetricsService
+{
+    public string Measure() => "cloud-metrics";
+}
+
 

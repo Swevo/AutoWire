@@ -353,7 +353,57 @@ public class ReportingService
 
 AW004 covers both `[Singleton]` and `[TrySingleton]`, and detects scoped services registered via `[Scoped]` or `[TryScoped]`.
 
+---
 
+## Profile-based registration
+
+Use `Profile` to conditionally register services based on environment or deployment context:
+
+```csharp
+// Always registered (no profile)
+[Scoped]
+public class InMemoryCache : ICache { }
+
+// Only registered when profile matches
+[Scoped(Profile = "production")]
+public class RedisCache : ICache { }
+
+[Scoped(Profile = "testing")]
+public class NullCache : ICache { }
+```
+
+```csharp
+// Register all unprofiled services + "production" services
+builder.Services.AddAutoWireServices(profile: "production");
+
+// Register only unprofiled services (default — unchanged behaviour)
+builder.Services.AddAutoWireServices();
+```
+
+The `profile` parameter defaults to `null`. All existing projects that call `AddAutoWireServices()` without arguments are unaffected.
+
+### Generated code
+
+```csharp
+public static IServiceCollection AddAutoWireServices(
+    this IServiceCollection services,
+    string? profile = null)
+{
+    services.AddScoped<ICache, InMemoryCache>();  // always
+
+    if (profile == "production")
+        services.AddScoped<ICache, RedisCache>();
+
+    if (profile == "testing")
+        services.AddScoped<ICache, NullCache>();
+
+    return services;
+}
+```
+
+> **Note:** Profile-specific services use last-registration-wins by default. Use `Duplicate = DuplicateStrategy.Replace` to explicitly remove the default before adding the profile service.
+
+---
 
 AutoWire fully supports open generic registrations. The correct `typeof()` overload is generated automatically — no reflection needed.
 
@@ -578,6 +628,9 @@ Works with ASP.NET Core, Worker Services, MAUI, Blazor, console apps — any pro
 
 ## FAQ
 
+**Q: Can I use [DecorateScoped] with open generic types like IRepository<>?**
+Not currently — Microsoft.Extensions.DependencyInjection doesn't support factory-based registrations for open generic types, which is required for the decorator pattern. Decorators work with closed generic types (e.g. `[DecorateScoped(typeof(IRepository<Order>))]`). Register the inner concrete type explicitly for open-generic scenarios.
+
 **Q: I'm getting AW004 — what is a captive dependency?**
 A captive dependency occurs when a Singleton holds a reference to a Scoped service. Since singletons live for the application's lifetime, the scoped service is never released when its scope ends. Fix it by injecting `IServiceScopeFactory` and creating a short-lived scope inside the method that needs the scoped service.
 
@@ -592,6 +645,9 @@ AW003 catches it at compile time with a build error. `[Scoped(typeof(IFoo))]` on
 
 **Q: What if I have two services implementing the same interface?**
 AutoWire registers each independently and emits an AW002 info diagnostic. Use `DuplicateStrategy.Replace` to make the winner explicit, `DuplicateStrategy.Skip` to keep the first, or keyed services to disambiguate.
+
+**Q: Can I register different implementations per environment (e.g. Production vs Testing)?**
+Yes — use `Profile`: `[Scoped(Profile = "production")]`. Call `AddAutoWireServices(profile: "production")` to activate profile-specific services alongside unprofiled ones. Services with no `Profile` are always registered regardless.
 
 **Q: Does it work with open generic types?**
 Yes — AutoWire auto-discovers compatible open generic interfaces and emits `services.AddScoped(typeof(IRepo<>), typeof(Repo<>))`. See the [Open generic types](#open-generic-types) section.

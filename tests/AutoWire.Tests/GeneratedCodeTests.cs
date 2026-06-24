@@ -341,4 +341,60 @@ public class GeneratedCodeTests
         Assert.NotNull(sp.GetService<SimpleLogService>());
         Assert.NotNull(sp.GetService<TimestampLogDecorator>());
     }
+
+    // ── Profile-based registration ────────────────────────────────────────────
+
+    [Fact]
+    public void Profile_NoProfile_RegistersOnlyUnprofiledServices()
+    {
+        var services = new ServiceCollection();
+        services.AddAutoWireServices(); // no profile
+        using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+        // InMemoryStorageService has no profile — always registered
+        Assert.NotNull(scope.ServiceProvider.GetService<IStorageService>());
+        Assert.IsType<InMemoryStorageService>(scope.ServiceProvider.GetService<IStorageService>());
+        // Profile-only services not registered
+        Assert.Null(scope.ServiceProvider.GetService<IMetricsService>());
+    }
+
+    [Fact]
+    public void Profile_CloudProfile_RegistersProfileAndUnprofiledServices()
+    {
+        var services = new ServiceCollection();
+        services.AddAutoWireServices(profile: "cloud");
+        using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+        // Profile "cloud" wins for IStorageService (last registration wins)
+        Assert.IsType<CloudStorageService>(scope.ServiceProvider.GetService<IStorageService>());
+        // Cloud-only singleton is now registered
+        Assert.NotNull(provider.GetService<IMetricsService>());
+        Assert.IsType<CloudMetricsService>(provider.GetService<IMetricsService>());
+    }
+
+    [Fact]
+    public void Profile_AzureProfile_RegistersAzureServicesOnly()
+    {
+        var services = new ServiceCollection();
+        services.AddAutoWireServices(profile: "azure");
+        using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+        // Profile "azure" wins for IStorageService
+        Assert.IsType<AzureStorageService>(scope.ServiceProvider.GetService<IStorageService>());
+        // "cloud" profile service not registered when profile="azure"
+        Assert.Null(scope.ServiceProvider.GetService<IMetricsService>());
+    }
+
+    [Fact]
+    public void Profile_UnknownProfile_OnlyUnprofiledServicesRegistered()
+    {
+        var services = new ServiceCollection();
+        services.AddAutoWireServices(profile: "nonexistent");
+        using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+        // No-profile services still registered
+        Assert.IsType<InMemoryStorageService>(scope.ServiceProvider.GetService<IStorageService>());
+        // Profile-only services not registered
+        Assert.Null(scope.ServiceProvider.GetService<IMetricsService>());
+    }
 }
