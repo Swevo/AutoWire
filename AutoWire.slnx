@@ -1,0 +1,4 @@
+<Solution>
+  <Folder Name="/src/"><Project Path="src/AutoWire/AutoWire.csproj" /></Folder>
+  <Folder Name="/tests/"><Project Path="tests/AutoWire.Tests/AutoWire.Tests.csproj" /></Folder>
+</Solution>
