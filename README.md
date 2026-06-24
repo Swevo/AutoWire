@@ -449,6 +449,37 @@ Apply `[Decorate*]` to a class that decorates multiple service types using `Allo
 public class CachingOrderService : IOrderService, IReadOnlyOrderService { ... }
 ```
 
+### Ordered decorator stacking
+
+When multiple decorators target the same service type, use `Order` to control which is innermost (closest to the original) and which is outermost (what consumers receive):
+
+```csharp
+[Scoped]
+public class OrderService : IOrderService { ... }
+
+// Order = 1 → applied first, wraps OrderService directly (inner)
+[DecorateScoped(typeof(IOrderService), Order = 1)]
+public class LoggingOrderService : IOrderService
+{
+    public LoggingOrderService(IOrderService inner) { _inner = inner; }
+}
+
+// Order = 2 → applied second, wraps LoggingOrderService (outer — what you receive)
+[DecorateScoped(typeof(IOrderService), Order = 2)]
+public class CachingOrderService : IOrderService
+{
+    public CachingOrderService(IOrderService inner) { _inner = inner; }
+}
+```
+
+Result: `provider.GetRequiredService<IOrderService>()` → `CachingOrderService(LoggingOrderService(OrderService))`
+
+All intermediate types are self-registered so you can inject them directly:
+```csharp
+provider.GetRequiredService<LoggingOrderService>(); // ✓ inner layer
+provider.GetRequiredService<OrderService>();         // ✓ original
+```
+
 ### Decorating manually-registered services
 
 If the inner service wasn't registered via AutoWire (e.g. registered manually in `Program.cs`), AutoWire generates a runtime fallback that scans the `IServiceCollection` to find and wrap the existing registration automatically.

@@ -316,4 +316,29 @@ public class GeneratedCodeTests
         // IEmailSender was NOT in the explicit ServiceType — should not be registered
         Assert.Null(provider.GetService<IEmailSender>());
     }
+
+    // ── Ordered decorators ────────────────────────────────────────────────────
+
+    [Fact]
+    public void OrderedDecorators_ChainAppliedInnerToOuter()
+    {
+        // Order=1 (TimestampLogDecorator) is inner, Order=2 (UpperCaseLogDecorator) is outer.
+        // Resolving ILogService should produce: UpperCase(Timestamp(Simple))
+        // Log("hello") → UpperCase wraps → Timestamp wraps → Simple → "[LOG] [TS] hello" → ToUpper → "[LOG] [TS] HELLO"
+        using var provider = BuildProvider();
+        var logService = provider.GetRequiredService<ILogService>();
+        Assert.IsType<UpperCaseLogDecorator>(logService);
+        Assert.Equal("[LOG] [TS] HELLO", logService.Log("hello"));
+    }
+
+    [Fact]
+    public void OrderedDecorators_IntermediateConcreteTypes_AreResolvable()
+    {
+        // Each intermediate concrete type should be independently resolvable.
+        using var provider = BuildProvider();
+        using var scope = provider.CreateScope();
+        var sp = scope.ServiceProvider;
+        Assert.NotNull(sp.GetService<SimpleLogService>());
+        Assert.NotNull(sp.GetService<TimestampLogDecorator>());
+    }
 }
