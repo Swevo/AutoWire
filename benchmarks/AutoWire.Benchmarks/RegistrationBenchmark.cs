@@ -12,8 +12,18 @@
 
 namespace AutoWire.Benchmarks;
 
-[MemoryDiagnoser]
-[SimpleJob(iterationCount: 20)]
+public class InProcessConfig : ManualConfig
+{
+    public InProcessConfig()
+    {
+        AddJob(Job.ShortRun
+            .WithToolchain(InProcessEmitToolchain.Instance)
+            .WithIterationCount(20));
+        AddDiagnoser(MemoryDiagnoser.Default);
+    }
+}
+
+[Config(typeof(InProcessConfig))]
 public class RegistrationBenchmark
 {
     [Benchmark(Baseline = true)]
