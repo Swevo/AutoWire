@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/Api/">
+    <Project Path="Api/AutoWire.Sample.Api.csproj" />
+  </Folder>
+  <Folder Name="/Worker/">
+    <Project Path="Worker/AutoWire.Sample.Worker.csproj" />
+  </Folder>
+</Solution>

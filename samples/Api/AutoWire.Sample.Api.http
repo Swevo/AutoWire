@@ -1,0 +1,6 @@
+@AutoWire.Sample.Api_HostAddress = http://localhost:5175
+
+GET {{AutoWire.Sample.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

@@ -746,6 +746,13 @@ Add `[assembly: AutoWire.AutoWireOptions(MethodName = "AddTestServices")]` to yo
 **Q: Does it work with SpecFlow / xUnit / NUnit test fixtures?**
 Yes. Call `AddAutoWireServices()` first, then register stubs/fakes after — last registration wins. See the [Testing & SpecFlow](#testing--specflow) section for a full example.
 
+**Q: I'm getting CS1061 — 'AddAutoWireServices' not found. What's wrong?**
+The generated `AddAutoWireServices()` extension method lives in the `AutoWire` namespace. Add `using AutoWire;` to any file that calls it, or add a global using to your project:
+```csharp
+// GlobalUsings.cs
+global using AutoWire;
+```
+
 **Q: Can I see the generated code?**
 Yes — look in `obj/Debug/net9.0/generated/AutoWire/AutoWire.AutoWireGenerator/AutoWireServiceCollectionExtensions.g.cs`.
 
@@ -815,6 +822,20 @@ public class TestDependencies : IDependencyInjectionContainerBuilder
 }
 ```
 ---
+
+## Samples
+
+Runnable examples in the [`samples/`](samples/) folder:
+
+| Sample | What it shows |
+|--------|---------------|
+| [AutoWire.Sample.Api](samples/Api/) | Convention scanning, decorators, profiles, keyed services, Scalar UI |
+| [AutoWire.Sample.Worker](samples/Worker/) | `[HostedService]`, Singleton, Transient in a background Worker |
+
+```bash
+cd samples/Api && dotnet run
+cd samples/Worker && dotnet run
+```
 
 ## 💼 Need .NET consulting?
 
