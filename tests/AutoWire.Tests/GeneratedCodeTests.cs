@@ -480,4 +480,41 @@ public class GeneratedCodeTests
         Assert.NotNull(r1);
         Assert.Same(r1, r2);
     }
+
+    // ── [Conditional] tests ────────────────────────────────────────────────────
+
+    [Fact]
+    public void Conditional_DEBUG_ServiceIsRegisteredInDebugBuild()
+    {
+#if DEBUG
+        using var provider = BuildProvider();
+        var svc = provider.GetService<IDebugService>();
+        Assert.NotNull(svc);
+        Assert.IsType<DebugInfoService>(svc);
+#else
+        // In Release builds the #if DEBUG block is skipped — service not registered
+        using var provider = BuildProvider();
+        Assert.Null(provider.GetService<IDebugService>());
+#endif
+    }
+
+    // ── IncludeLazy tests ──────────────────────────────────────────────────────
+
+    [Fact]
+    public void IncludeLazy_RegistersLazyWrapper()
+    {
+        using var provider = BuildProvider();
+        var lazy = provider.GetService<Lazy<IHeavyService>>();
+        Assert.NotNull(lazy);
+        Assert.Equal("loaded", lazy!.Value.Load());
+    }
+
+    [Fact]
+    public void IncludeLazy_MainServiceStillResolvable()
+    {
+        using var provider = BuildProvider();
+        var direct = provider.GetService<IHeavyService>();
+        Assert.NotNull(direct);
+        Assert.IsType<HeavyService>(direct);
+    }
 }
