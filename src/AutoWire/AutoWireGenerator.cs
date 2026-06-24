@@ -24,6 +24,8 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
     private const string DecorateTransientFqn = "AutoWire.DecorateTransientAttribute";
     private const string HostedServiceFqn     = "AutoWire.HostedServiceAttribute";
     private const string OptionsFqn           = "AutoWire.AutoWireOptionsAttribute";
+    private const string AutoWireScanFqn      = "AutoWire.AutoWireScanAttribute";
+    private const string AutoWireExcludeFqn   = "AutoWire.AutoWireExcludeAttribute";
 
     // ── Diagnostics ────────────────────────────────────────────────────────────
     private static readonly DiagnosticDescriptor AW001AbstractClass = new(
@@ -255,6 +257,28 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                 /// </summary>
                 public string MethodName { get; set; } = "AddAutoWireServices";
             }
+
+            /// <summary>
+            /// Scans the specified namespace and registers all non-abstract, non-excluded classes
+            /// that do not already carry an explicit AutoWire registration attribute.
+            /// Apply at the assembly level — can be used multiple times for different namespaces or lifetimes.
+            /// </summary>
+            /// <example>[assembly: AutoWire.AutoWireScan("MyApp.Services")]</example>
+            [AttributeUsage(AttributeTargets.Assembly, AllowMultiple = true)]
+            public sealed class AutoWireScanAttribute : Attribute
+            {
+                /// <summary>The namespace to scan. Sub-namespaces are included by default.</summary>
+                public string Namespace { get; }
+                /// <summary>The DI lifetime for all scanned services. Accepts "Scoped" (default), "Singleton", or "Transient".</summary>
+                public string Lifetime { get; set; } = "Scoped";
+                /// <summary>When true (default), also scans child namespaces such as MyApp.Services.Impl.</summary>
+                public bool IncludeSubNamespaces { get; set; } = true;
+                public AutoWireScanAttribute(string @namespace) { Namespace = @namespace; }
+            }
+
+            /// <summary>Opts this class out of convention-based scanning via <see cref="AutoWireScanAttribute"/>.</summary>
+            [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
+            public sealed class AutoWireExcludeAttribute : Attribute { }
         }
         """;
 
@@ -314,6 +338,9 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             return "AddAutoWireServices";
         });
 
+        // ── Convention scan pipeline ───────────────────────────────────────────
+        var scannedRegs = CollectScanRegistrations(context);
+
         // ── AW004: captive dependency detection ───────────────────────────────
         RegisterCaptiveDependencyDiagnostics(context);
 
@@ -328,12 +355,13 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             .Combine(decoSingleton.Collect())
             .Combine(decoTransient.Collect())
             .Combine(hostedServices.Collect())
+            .Combine(scannedRegs.Collect())
             .Combine(methodName);
 
         context.RegisterSourceOutput(all, static (ctx, combined) =>
         {
-            var ((((((((((s, si), t), ts), tsi), tt), ds), dsi), dt), hs), name) = combined;
-            var registrations = s.AddRange(si).AddRange(t).AddRange(ts).AddRange(tsi).AddRange(tt);
+            var (((((((((((s, si), t), ts), tsi), tt), ds), dsi), dt), hs), sr), name) = combined;
+            var registrations = s.AddRange(si).AddRange(t).AddRange(ts).AddRange(tsi).AddRange(tt).AddRange(sr);
             var decorators    = ds.AddRange(dsi).AddRange(dt);
             if (registrations.IsEmpty && decorators.IsEmpty && hs.IsEmpty) return;
 
@@ -546,6 +574,109 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             .Select(static (s, _) => s!);
     }
 
+    // ── Convention scan collection ─────────────────────────────────────────────
+
+    private static IncrementalValuesProvider<RegistrationInfo> CollectScanRegistrations(
+        IncrementalGeneratorInitializationContext context)
+    {
+        return context.CompilationProvider
+            .Select(static (compilation, _) => FindScannedRegistrations(compilation))
+            .SelectMany(static (arr, _) => arr);
+    }
+
+    private static ImmutableArray<RegistrationInfo> FindScannedRegistrations(Compilation compilation)
+    {
+        // Parse all [AutoWireScan] assembly attributes
+        var scanConfigs = new List<(string Namespace, string Lifetime, bool IncludeSubNs)>();
+        foreach (var attr in compilation.Assembly.GetAttributes())
+        {
+            if (attr.AttributeClass?.ToDisplayString() != AutoWireScanFqn) continue;
+            if (attr.ConstructorArguments.Length == 0) continue;
+            if (attr.ConstructorArguments[0].Value is not string ns || string.IsNullOrEmpty(ns)) continue;
+
+            var lifetime = "Scoped";
+            var includeSubNs = true;
+            foreach (var na in attr.NamedArguments)
+            {
+                if (na.Key == "Lifetime" && na.Value.Value is string l &&
+                    (l == "Singleton" || l == "Transient" || l == "Scoped"))
+                    lifetime = l;
+                else if (na.Key == "IncludeSubNamespaces" && na.Value.Value is bool b)
+                    includeSubNs = b;
+            }
+            scanConfigs.Add((ns, lifetime, includeSubNs));
+        }
+
+        if (scanConfigs.Count == 0) return ImmutableArray<RegistrationInfo>.Empty;
+
+        var results = ImmutableArray.CreateBuilder<RegistrationInfo>();
+        var seenTypes = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var type in GetAllNamedTypesInNamespace(compilation.Assembly.GlobalNamespace))
+        {
+            if (type.IsAbstract) continue;
+            if (type.IsGenericType) continue;
+
+            // [AutoWireExclude] — user explicitly opts out
+            if (TypeHasAutoWireAttribute(type, AutoWireExcludeFqn)) continue;
+            // Already has an explicit registration attribute — don't double-register
+            if (HasAnyRegistrationAttribute(type)) continue;
+
+            var typeNs = type.ContainingNamespace?.ToDisplayString() ?? string.Empty;
+            var typeFqn = type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+            if (seenTypes.Contains(typeFqn)) continue;
+
+            foreach (var (scanNs, lifetime, includeSubNs) in scanConfigs)
+            {
+                var matches = includeSubNs
+                    ? typeNs == scanNs || typeNs.StartsWith(scanNs + ".", StringComparison.Ordinal)
+                    : typeNs == scanNs;
+
+                if (!matches) continue;
+
+                seenTypes.Add(typeFqn);
+
+                var serviceTypes = new List<string>();
+                foreach (var iface in type.AllInterfaces)
+                {
+                    var ifNs = iface.ContainingNamespace?.ToDisplayString() ?? string.Empty;
+                    if (IsSystemNamespace(ifNs)) continue;
+                    serviceTypes.Add(iface.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat));
+                }
+                if (serviceTypes.Count == 0)
+                    serviceTypes.Add(typeFqn);
+
+                results.Add(new RegistrationInfo(
+                    typeFqn,
+                    serviceTypes.ToImmutableArray(),
+                    lifetime,
+                    key: null,
+                    isOpenGeneric: false,
+                    duplicateStrategy: DuplicateStrategy.Add,
+                    includeSelf: false,
+                    profile: null,
+                    isScanned: true));
+
+                break; // first matching scan config wins
+            }
+        }
+
+        return results.ToImmutable();
+    }
+
+    private static bool HasAnyRegistrationAttribute(INamedTypeSymbol type)
+    {
+        foreach (var attr in type.GetAttributes())
+        {
+            var fqn = attr.AttributeClass?.ToDisplayString();
+            if (fqn == ScopedFqn || fqn == SingletonFqn || fqn == TransientFqn ||
+                fqn == TryScopedFqn || fqn == TrySingletonFqn || fqn == TryTransientFqn ||
+                fqn == HostedServiceFqn)
+                return true;
+        }
+        return false;
+    }
+
     // ── AW002 helper ──────────────────────────────────────────────────────────
 
     private static void ReportDuplicateServiceDiagnostics(
@@ -555,7 +686,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
         // Only warn when multiple Add-strategy (non-Skip, non-Replace) registrations share a service type.
         // Skip and Replace explicitly acknowledge the duplicate — no noise.
         var seenServices = new HashSet<string>();
-        foreach (var reg in registrations.Where(r => r.Key is null && r.DuplicateStrategy == DuplicateStrategy.Add && r.Profile is null))
+        foreach (var reg in registrations.Where(r => r.Key is null && r.DuplicateStrategy == DuplicateStrategy.Add && r.Profile is null && !r.IsScanned))
         {
             foreach (var svc in reg.ServiceTypes)
             {

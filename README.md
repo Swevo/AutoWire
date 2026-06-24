@@ -355,6 +355,76 @@ AW004 covers both `[Singleton]` and `[TrySingleton]`, and detects scoped service
 
 ---
 
+## Convention-based scanning
+
+For large codebases where adding an attribute to every class is impractical, AutoWire supports **convention-based scanning** via an assembly-level attribute.
+
+```csharp
+// At the top of any .cs file in your project (e.g. ScanConfig.cs)
+[assembly: AutoWire.AutoWireScan("MyApp.Services")]
+```
+
+AutoWire will scan every non-abstract class in that namespace (and sub-namespaces by default) and register it **as if you had written `[Scoped]` on each one**.
+
+### What is automatically registered?
+
+- **Concrete, non-abstract classes** in the target namespace
+- Classes **without** an existing `[Scoped]`, `[Singleton]`, `[Transient]` etc. attribute (explicit always wins)
+- Classes **without** `[AutoWireExclude]`
+- Open-generic classes are **skipped** (they need an explicit registration)
+
+### Opting out
+
+```csharp
+[AutoWireExclude]
+public class InternalHelper : IHelper { }   // skipped by scanning
+```
+
+### Changing the default lifetime
+
+```csharp
+// All classes in the namespace registered as Singleton
+[assembly: AutoWire.AutoWireScan("MyApp.Services", Lifetime = "Singleton")]
+
+// Or Transient
+[assembly: AutoWire.AutoWireScan("MyApp.Adapters", Lifetime = "Transient")]
+```
+
+### Sub-namespace control
+
+Sub-namespaces (`MyApp.Services.Impl`, `MyApp.Services.Adapters`, etc.) are included by default. Opt out with `IncludeSubNamespaces = false`:
+
+```csharp
+[assembly: AutoWire.AutoWireScan("MyApp.Services", IncludeSubNamespaces = false)]
+```
+
+### Multiple scan configurations
+
+Stack multiple `[AutoWireScan]` attributes for different lifetimes or namespaces:
+
+```csharp
+[assembly: AutoWire.AutoWireScan("MyApp.Services")]                              // Scoped (default)
+[assembly: AutoWire.AutoWireScan("MyApp.Repositories", Lifetime = "Singleton")]  // Singletons
+[assembly: AutoWire.AutoWireScan("MyApp.Adapters", Lifetime = "Transient")]      // Transients
+```
+
+### Mixing explicit and convention registration
+
+Scanning and explicit attributes compose naturally. Explicit `[Scoped]` etc. on a class **always takes priority** — scanned registrations won't duplicate it:
+
+```csharp
+[assembly: AutoWire.AutoWireScan("MyApp.Services")]
+
+// This class is in MyApp.Services but has an explicit key — the explicit wins.
+[Scoped(Key = "v2")]
+public class OrderServiceV2 : IOrderService { }
+
+// This class has no attribute — picked up by scanning.
+public class InvoiceService : IInvoiceService { }
+```
+
+---
+
 ## Profile-based registration
 
 Use `Profile` to conditionally register services based on environment or deployment context:
@@ -648,6 +718,9 @@ AutoWire registers each independently and emits an AW002 info diagnostic. Use `D
 
 **Q: Can I register different implementations per environment (e.g. Production vs Testing)?**
 Yes — use `Profile`: `[Scoped(Profile = "production")]`. Call `AddAutoWireServices(profile: "production")` to activate profile-specific services alongside unprofiled ones. Services with no `Profile` are always registered regardless.
+
+**Q: Can I scan an entire namespace without adding attributes to every class?**
+Yes — use `[assembly: AutoWire.AutoWireScan("MyApp.Services")]`. AutoWire registers every non-abstract class in that namespace (Scoped by default). Use `Lifetime = "Singleton"` or `"Transient"` to change the lifetime. Use `[AutoWireExclude]` on individual classes to opt out. Explicit `[Scoped]` etc. attributes always take priority over scanning.
 
 **Q: Does it work with open generic types?**
 Yes — AutoWire auto-discovers compatible open generic interfaces and emits `services.AddScoped(typeof(IRepo<>), typeof(Repo<>))`. See the [Open generic types](#open-generic-types) section.

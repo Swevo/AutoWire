@@ -397,4 +397,42 @@ public class GeneratedCodeTests
         // Profile-only services not registered
         Assert.Null(scope.ServiceProvider.GetService<IMetricsService>());
     }
+
+    // ── Convention scan ───────────────────────────────────────────────────────
+
+    [Fact]
+    public void ConventionScan_RegistersNonExcludedConcreteServicesInNamespace()
+    {
+        using var provider = BuildProvider();
+        using var scope = provider.CreateScope();
+        var scanServices = scope.ServiceProvider.GetServices<AutoWireTests.Scan.IScanService>().ToList();
+
+        Assert.Contains(scanServices, s => s is AutoWireTests.Scan.ScanServiceA);
+        Assert.Contains(scanServices, s => s is AutoWireTests.Scan.ScanServiceB);
+        // [AutoWireExclude] — must not appear
+        Assert.DoesNotContain(scanServices, s => s is AutoWireTests.Scan.ExcludedScanService);
+        // Abstract — must not appear
+        Assert.DoesNotContain(scanServices, s => s.GetType().IsAbstract);
+    }
+
+    [Fact]
+    public void ConventionScan_SkipsExplicitlyAttributedClasses()
+    {
+        // ExplicitlyScopedService has [Scoped] — it appears exactly once, not twice.
+        using var provider = BuildProvider();
+        using var scope = provider.CreateScope();
+        var all = scope.ServiceProvider.GetServices<AutoWireTests.Scan.IScanService>().ToList();
+        var explicit_ = all.OfType<AutoWireTests.Scan.ExplicitlyScopedService>().ToList();
+        Assert.Single(explicit_); // registered once (from [Scoped]), not twice
+    }
+
+    [Fact]
+    public void ConventionScan_IncludesSubNamespacesByDefault()
+    {
+        using var provider = BuildProvider();
+        using var scope = provider.CreateScope();
+        var sub = scope.ServiceProvider.GetService<AutoWireTests.Scan.Sub.ISubScanService>();
+        Assert.NotNull(sub);
+        Assert.IsType<AutoWireTests.Scan.Sub.SubScanServiceX>(sub);
+    }
 }
