@@ -19,6 +19,9 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
     private const string TryScopedFqn    = "AutoWire.TryScopedAttribute";
     private const string TrySingletonFqn = "AutoWire.TrySingletonAttribute";
     private const string TryTransientFqn = "AutoWire.TryTransientAttribute";
+    private const string DecorateScopedFqn    = "AutoWire.DecorateScopedAttribute";
+    private const string DecorateSingletonFqn = "AutoWire.DecorateSingletonAttribute";
+    private const string DecorateTransientFqn = "AutoWire.DecorateTransientAttribute";
     private const string OptionsFqn      = "AutoWire.AutoWireOptionsAttribute";
 
     // ── Diagnostics ────────────────────────────────────────────────────────────
@@ -155,6 +158,33 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                 public TryTransientAttribute(Type serviceType) { ServiceType = serviceType; }
             }
 
+            /// <summary>
+            /// Wraps the existing <b>scoped</b> registration for <paramref name="serviceType"/> with this decorator class.
+            /// The inner implementation is self-registered so that the decorator can be injected with the concrete type.
+            /// </summary>
+            [AttributeUsage(AttributeTargets.Class, AllowMultiple = true, Inherited = false)]
+            public sealed class DecorateScopedAttribute : Attribute
+            {
+                public Type ServiceType { get; }
+                public DecorateScopedAttribute(Type serviceType) { ServiceType = serviceType; }
+            }
+
+            /// <summary>Wraps the existing <b>singleton</b> registration for <paramref name="serviceType"/> with this decorator class.</summary>
+            [AttributeUsage(AttributeTargets.Class, AllowMultiple = true, Inherited = false)]
+            public sealed class DecorateSingletonAttribute : Attribute
+            {
+                public Type ServiceType { get; }
+                public DecorateSingletonAttribute(Type serviceType) { ServiceType = serviceType; }
+            }
+
+            /// <summary>Wraps the existing <b>transient</b> registration for <paramref name="serviceType"/> with this decorator class.</summary>
+            [AttributeUsage(AttributeTargets.Class, AllowMultiple = true, Inherited = false)]
+            public sealed class DecorateTransientAttribute : Attribute
+            {
+                public Type ServiceType { get; }
+                public DecorateTransientAttribute(Type serviceType) { ServiceType = serviceType; }
+            }
+
             /// <summary>Assembly-level options for AutoWire source generation.</summary>
             [AttributeUsage(AttributeTargets.Assembly, AllowMultiple = false)]
             public sealed class AutoWireOptionsAttribute : Attribute
@@ -184,12 +214,20 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
         var tryTransient = CollectRegistrations(context, TryTransientFqn, "Transient", DuplicateStrategy.Skip);
 
         // ── AW001: abstract class diagnostics ─────────────────────────────────
-        RegisterAbstractDiagnostics(context, ScopedFqn,       "Scoped");
-        RegisterAbstractDiagnostics(context, SingletonFqn,    "Singleton");
-        RegisterAbstractDiagnostics(context, TransientFqn,    "Transient");
-        RegisterAbstractDiagnostics(context, TryScopedFqn,    "TryScoped");
-        RegisterAbstractDiagnostics(context, TrySingletonFqn, "TrySingleton");
-        RegisterAbstractDiagnostics(context, TryTransientFqn, "TryTransient");
+        RegisterAbstractDiagnostics(context, ScopedFqn,          "Scoped");
+        RegisterAbstractDiagnostics(context, SingletonFqn,       "Singleton");
+        RegisterAbstractDiagnostics(context, TransientFqn,       "Transient");
+        RegisterAbstractDiagnostics(context, TryScopedFqn,       "TryScoped");
+        RegisterAbstractDiagnostics(context, TrySingletonFqn,    "TrySingleton");
+        RegisterAbstractDiagnostics(context, TryTransientFqn,    "TryTransient");
+        RegisterAbstractDiagnostics(context, DecorateScopedFqn,    "DecorateScoped");
+        RegisterAbstractDiagnostics(context, DecorateSingletonFqn, "DecorateSingleton");
+        RegisterAbstractDiagnostics(context, DecorateTransientFqn, "DecorateTransient");
+
+        // ── Decorator pipelines ────────────────────────────────────────────────
+        var decoScoped    = CollectDecorators(context, DecorateScopedFqn,    "Scoped");
+        var decoSingleton = CollectDecorators(context, DecorateSingletonFqn, "Singleton");
+        var decoTransient = CollectDecorators(context, DecorateTransientFqn, "Transient");
 
         // ── AutoWireOptions assembly attribute ────────────────────────────────
         var methodName = context.CompilationProvider.Select(static (compilation, _) =>
@@ -210,19 +248,23 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             .Combine(tryScoped.Collect())
             .Combine(trySingleton.Collect())
             .Combine(tryTransient.Collect())
+            .Combine(decoScoped.Collect())
+            .Combine(decoSingleton.Collect())
+            .Combine(decoTransient.Collect())
             .Combine(methodName);
 
         context.RegisterSourceOutput(all, static (ctx, combined) =>
         {
-            var ((((((s, si), t), ts), tsi), tt), name) = combined;
+            var (((((((((s, si), t), ts), tsi), tt), ds), dsi), dt), name) = combined;
             var registrations = s.AddRange(si).AddRange(t).AddRange(ts).AddRange(tsi).AddRange(tt);
-            if (registrations.IsEmpty) return;
+            var decorators    = ds.AddRange(dsi).AddRange(dt);
+            if (registrations.IsEmpty && decorators.IsEmpty) return;
 
             ReportDuplicateServiceDiagnostics(ctx, registrations);
 
             ctx.AddSource(
                 "AutoWireServiceCollectionExtensions.g.cs",
-                SourceText.From(GenerateSource(registrations, name), Encoding.UTF8));
+                SourceText.From(GenerateSource(registrations, decorators, name), Encoding.UTF8));
         });
     }
 
@@ -267,6 +309,41 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                     ctx.ReportDiagnostic(Diagnostic.Create(AW002DuplicateService, Location.None, svc));
             }
         }
+    }
+
+    // ── Decorator collection ───────────────────────────────────────────────────
+
+    private static IncrementalValuesProvider<DecoratorInfo> CollectDecorators(
+        IncrementalGeneratorInitializationContext context,
+        string attributeFqn,
+        string lifetime)
+    {
+        return context.SyntaxProvider
+            .ForAttributeWithMetadataName(
+                attributeFqn,
+                predicate: static (node, _) => node is ClassDeclarationSyntax,
+                transform: (ctx, _) => TransformAllDecorators(ctx, lifetime))
+            .SelectMany(static (arr, _) => arr);
+    }
+
+    private static ImmutableArray<DecoratorInfo> TransformAllDecorators(
+        GeneratorAttributeSyntaxContext ctx,
+        string lifetime)
+    {
+        if (ctx.TargetSymbol is not INamedTypeSymbol classSymbol) return ImmutableArray<DecoratorInfo>.Empty;
+        if (classSymbol.IsAbstract) return ImmutableArray<DecoratorInfo>.Empty;
+
+        var builder = ImmutableArray.CreateBuilder<DecoratorInfo>(ctx.Attributes.Length);
+        foreach (var attr in ctx.Attributes)
+        {
+            if (attr.ConstructorArguments.Length == 0) continue;
+            if (attr.ConstructorArguments[0].Value is not ITypeSymbol serviceType) continue;
+            builder.Add(new DecoratorInfo(
+                ToFullyQualified(classSymbol),
+                ToFullyQualified(serviceType),
+                lifetime));
+        }
+        return builder.ToImmutable();
     }
 
     // ── Registration collection ────────────────────────────────────────────────
@@ -389,7 +466,10 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
 
     // ── Code generation ────────────────────────────────────────────────────────
 
-    private static string GenerateSource(ImmutableArray<RegistrationInfo> registrations, string methodName)
+    private static string GenerateSource(
+        ImmutableArray<RegistrationInfo> registrations,
+        ImmutableArray<DecoratorInfo> decorators,
+        string methodName)
     {
         var sb = new StringBuilder();
         sb.AppendLine("// <auto-generated by AutoWire/>");
@@ -422,10 +502,71 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                 EmitLine(sb, reg, svc);
         }
 
+        // ── Decorators (always after normal registrations so the inner service is present) ──
+        if (!decorators.IsEmpty)
+        {
+            // Build compile-time map: service type → known concrete implementation type
+            var serviceToConcreteMap = new Dictionary<string, string>();
+            foreach (var reg in registrations.Where(static r => r.Key is null && !r.IsOpenGeneric))
+                foreach (var svc in reg.ServiceTypes)
+                    if (svc != reg.ImplementationType)
+                        serviceToConcreteMap[svc] = reg.ImplementationType;
+
+            var idx = 0;
+            foreach (var dec in decorators.OrderBy(static d => d.Lifetime).ThenBy(static d => d.DecoratorType))
+            {
+                sb.AppendLine();
+                EmitDecorator(sb, dec, serviceToConcreteMap, idx++);
+            }
+        }
+
         sb.AppendLine("        return services;");
         sb.AppendLine("    }");
         sb.AppendLine("}");
         return sb.ToString();
+    }
+
+    private static void EmitDecorator(
+        StringBuilder sb,
+        DecoratorInfo dec,
+        Dictionary<string, string> serviceToConcreteMap,
+        int index)
+    {
+        sb.AppendLine($"        // [Decorate{dec.Lifetime}] {dec.DecoratorType} wraps {dec.ServiceType}");
+
+        if (serviceToConcreteMap.TryGetValue(dec.ServiceType, out var concreteType))
+        {
+            // Compile-time known inner type — fully type-safe generated code.
+            sb.AppendLine($"        services.RemoveAll<{dec.ServiceType}>();");
+            sb.AppendLine($"        services.Add{dec.Lifetime}<{concreteType}>();");
+            sb.AppendLine($"        services.Add{dec.Lifetime}<{dec.ServiceType}>(sp =>");
+            sb.AppendLine($"            ({dec.ServiceType})global::Microsoft.Extensions.DependencyInjection.ActivatorUtilities.CreateInstance(");
+            sb.AppendLine($"                sp, typeof({dec.DecoratorType}), sp.GetRequiredService<{concreteType}>()));");
+        }
+        else
+        {
+            // Runtime fallback — inner type not registered via AutoWire (e.g. manually registered).
+            sb.AppendLine($"        {{");
+            sb.AppendLine($"            global::Microsoft.Extensions.DependencyInjection.ServiceDescriptor? __aw_dec{index} = null;");
+            sb.AppendLine($"            for (var __i = services.Count - 1; __i >= 0; __i--)");
+            sb.AppendLine($"                if (services[__i].ServiceType == typeof({dec.ServiceType}) && services[__i].ImplementationType != null)");
+            sb.AppendLine($"                {{ __aw_dec{index} = services[__i]; break; }}");
+            sb.AppendLine($"            if (__aw_dec{index} != null)");
+            sb.AppendLine($"            {{");
+            sb.AppendLine($"                var __aw_inner{index} = __aw_dec{index}.ImplementationType!;");
+            sb.AppendLine($"                services.Remove(__aw_dec{index});");
+            sb.AppendLine($"                services.Add(global::Microsoft.Extensions.DependencyInjection.ServiceDescriptor.Describe(");
+            sb.AppendLine($"                    __aw_inner{index}, __aw_inner{index}, __aw_dec{index}.Lifetime));");
+            sb.AppendLine($"                services.Add{dec.Lifetime}<{dec.ServiceType}>(sp =>");
+            sb.AppendLine($"                    ({dec.ServiceType})global::Microsoft.Extensions.DependencyInjection.ActivatorUtilities.CreateInstance(");
+            sb.AppendLine($"                        sp, typeof({dec.DecoratorType}), sp.GetRequiredService(__aw_inner{index})));");
+            sb.AppendLine($"            }}");
+            sb.AppendLine($"            else");
+            sb.AppendLine($"            {{");
+            sb.AppendLine($"                services.Add{dec.Lifetime}<{dec.ServiceType}, {dec.DecoratorType}>();");
+            sb.AppendLine($"            }}");
+            sb.AppendLine($"        }}");
+        }
     }
 
     private static void EmitLine(StringBuilder sb, RegistrationInfo reg, string svc)

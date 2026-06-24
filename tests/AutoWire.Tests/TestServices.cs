@@ -86,4 +86,22 @@ public class DefaultTryable : ITryable { public string GetValue() => "default"; 
 // Used to override DefaultTryable in TryScoped tests — no AutoWire attribute:
 public class MockTryable : ITryable { public string GetValue() => "mock"; }
 
+// ── Decorator: PoliteGreeter wraps SimpleGreeter for IGreeter ─────────────────
+
+public interface IGreeter { string Greet(string name); }
+
+[Scoped]
+public class SimpleGreeter : IGreeter
+{
+    public string Greet(string name) => $"Hello, {name}!";
+}
+
+[DecorateScoped(typeof(IGreeter))]
+public class PoliteGreeter : IGreeter
+{
+    private readonly IGreeter _inner;
+    public PoliteGreeter(IGreeter inner) { _inner = inner; }
+    public string Greet(string name) => $"[politely] {_inner.Greet(name)}";
+}
+
 

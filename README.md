@@ -284,6 +284,77 @@ provider.GetRequiredService<EventProcessor<EmailMessage>>();
 ```
 ---
 
+## Decorator pattern
+
+`[DecorateScoped]` / `[DecorateSingleton]` / `[DecorateTransient]` wraps an existing service registration with a decorator class at **compile time** — no Scrutor dependency required.
+
+```csharp
+// Inner service — registered normally
+[Scoped]
+public class OrderService : IOrderService
+{
+    public string GetStatus() => "pending";
+}
+
+// Decorator — wraps IOrderService
+[DecorateScoped(typeof(IOrderService))]
+public class LoggingOrderService : IOrderService
+{
+    private readonly IOrderService _inner;
+
+    // Constructor takes the SERVICE TYPE (IOrderService) — AutoWire injects the concrete inner
+    public LoggingOrderService(IOrderService inner) { _inner = inner; }
+
+    public string GetStatus()
+    {
+        Console.WriteLine("GetStatus called");
+        return _inner.GetStatus();
+    }
+}
+```
+
+```csharp
+// Program.cs — unchanged
+builder.Services.AddAutoWireServices();
+```
+
+AutoWire generates:
+
+```csharp
+// 1. Normal registration for inner service
+services.AddScoped<IOrderService, OrderService>();
+
+// 2. Decorator wiring (generated at the end, after all normal registrations)
+services.RemoveAll<IOrderService>();
+services.AddScoped<OrderService>();  // inner concrete self-registered — injectable directly
+services.AddScoped<IOrderService>(sp =>
+    (IOrderService)ActivatorUtilities.CreateInstance(
+        sp, typeof(LoggingOrderService), sp.GetRequiredService<OrderService>()));
+```
+
+### What this gives you
+
+- `provider.GetRequiredService<IOrderService>()` → `LoggingOrderService` wrapping `OrderService` ✓
+- `provider.GetRequiredService<OrderService>()` → `OrderService` directly (useful in tests) ✓
+- The decorator is the **same lifetime** as the `[DecorateScoped/Singleton/Transient]` attribute
+- **No reflection** — the inner type is resolved at compile time from AutoWire's own registration map
+
+### Multiple decorators
+
+Apply `[Decorate*]` to a class that decorates multiple service types using `AllowMultiple`:
+
+```csharp
+[DecorateScoped(typeof(IOrderService))]
+[DecorateScoped(typeof(IReadOnlyOrderService))]
+public class CachingOrderService : IOrderService, IReadOnlyOrderService { ... }
+```
+
+### Decorating manually-registered services
+
+If the inner service wasn't registered via AutoWire (e.g. registered manually in `Program.cs`), AutoWire generates a runtime fallback that scans the `IServiceCollection` to find and wrap the existing registration automatically.
+
+---
+
 ## How it works
 
 AutoWire is a [Roslyn incremental source generator](https://learn.microsoft.com/en-us/dotnet/csharp/roslyn-sdk/source-generators-overview). At **build time** it:

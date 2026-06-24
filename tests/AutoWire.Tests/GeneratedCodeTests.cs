@@ -238,4 +238,38 @@ public class GeneratedCodeTests
         using var provider = services.BuildServiceProvider();
         Assert.IsType<MockTryable>(provider.GetService<ITryable>());
     }
+
+    // ── Decorator tests ───────────────────────────────────────────────────────
+
+    [Fact]
+    public void Decorator_ResolvedAsDecoratorType()
+    {
+        using var provider = BuildProvider();
+        var svc = provider.GetRequiredService<IGreeter>();
+        Assert.IsType<PoliteGreeter>(svc);
+    }
+
+    [Fact]
+    public void Decorator_WrapsInnerService()
+    {
+        using var provider = BuildProvider();
+        Assert.Equal("[politely] Hello, World!", provider.GetRequiredService<IGreeter>().Greet("World"));
+    }
+
+    [Fact]
+    public void Decorator_InnerServiceRegisteredAsConcrete()
+    {
+        using var provider = BuildProvider();
+        Assert.IsType<SimpleGreeter>(provider.GetRequiredService<SimpleGreeter>());
+    }
+
+    [Fact]
+    public void Decorator_IsScoped_SameInstancePerScope()
+    {
+        using var provider = BuildProvider();
+        using var scope = provider.CreateScope();
+        var a = scope.ServiceProvider.GetRequiredService<IGreeter>();
+        var b = scope.ServiceProvider.GetRequiredService<IGreeter>();
+        Assert.Same(a, b);
+    }
 }

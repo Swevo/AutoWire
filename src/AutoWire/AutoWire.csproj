@@ -8,7 +8,7 @@
     <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
 
     <PackageId>AutoWire</PackageId>
-    <Version>1.3.0</Version>
+    <Version>1.4.0</Version>
     <Authors>Justin Bannister</Authors>
     <Copyright>Copyright (c) 2025 Justin Bannister</Copyright>
     <Description>Compile-time dependency injection auto-registration for .NET using Roslyn source generators. Add [Scoped], [Singleton], or [Transient] to your classes — AutoWire generates IServiceCollection registration code at build time. Zero runtime overhead, no reflection, no startup cost. Supports keyed services (.NET 8+) and works with ASP.NET Core, Worker Services, MAUI, and any Microsoft.Extensions.DependencyInjection project.</Description>
@@ -25,7 +25,7 @@
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     <Deterministic>true</Deterministic>
     <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
-    <PackageReleaseNotes>1.3.0: AllowMultiple attributes (register one class against multiple explicit types), DuplicateStrategy enum (Add/Skip/Replace) on [Scoped]/[Singleton]/[Transient], new [TryScoped]/[TrySingleton]/[TryTransient] attributes for library authors, Roslyn diagnostics AW001 (abstract class) and AW002 (duplicate non-keyed service). 1.2.0: Open generic support (typeof(IRepo&lt;&gt;) syntax) + AutoWireOptions(MethodName) for test project collision avoidance. 1.0.0: Initial release with [Scoped], [Singleton], [Transient], keyed services (.NET 8+).</PackageReleaseNotes>
+    <PackageReleaseNotes>1.4.0: Decorator support — [DecorateScoped(typeof(ISvc))]/[DecorateSingleton]/[DecorateTransient] wraps existing registrations at compile time. Inner service is self-registered for direct injection. Runtime fallback for services not registered via AutoWire. 1.3.0: AllowMultiple, DuplicateStrategy (Add/Skip/Replace), [TryScoped]/[TrySingleton]/[TryTransient], AW001+AW002 diagnostics. 1.2.0: Open generic support + AutoWireOptions(MethodName). 1.0.0: Initial release.</PackageReleaseNotes>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.*" PrivateAssets="all" />
