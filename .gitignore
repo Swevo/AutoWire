@@ -3,4 +3,5 @@ obj/
 *.user
 .vs/
 nupkgs/
+nupkg/
 test-results/
