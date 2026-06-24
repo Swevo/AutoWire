@@ -448,16 +448,40 @@ Works with ASP.NET Core, Worker Services, MAUI, Blazor, console apps — any pro
 ## FAQ
 
 **Q: What if I have two services implementing the same interface?**
-AutoWire registers each independently and emits an AW002 info diagnostic. Use `DuplicateStrategy.Replace` to make the winner explicit, or keyed services to disambiguate.
+AutoWire registers each independently and emits an AW002 info diagnostic. Use `DuplicateStrategy.Replace` to make the winner explicit, `DuplicateStrategy.Skip` to keep the first, or keyed services to disambiguate.
 
 **Q: Does it work with open generic types?**
 Yes — AutoWire auto-discovers compatible open generic interfaces and emits `services.AddScoped(typeof(IRepo<>), typeof(Repo<>))`. See the [Open generic types](#open-generic-types) section.
+
+**Q: Does it support the decorator pattern?**
+Yes — use `[DecorateScoped(typeof(IService))]`, `[DecorateSingleton]`, or `[DecorateTransient]` on a class to wrap an existing registration. AutoWire generates compile-time code that self-registers the inner type and wires the decorator. No Scrutor required.
+
+**Q: I'm writing a NuGet library and don't want to override my consumer's registrations. What should I use?**
+Use `[TryScoped]`, `[TrySingleton]`, or `[TryTransient]`. These generate `TryAddScoped/Singleton/Transient` calls — the registration is silently skipped if the service type is already registered by the consumer.
+
+**Q: Can I register one class against multiple interfaces?**
+Yes — since `AllowMultiple = true`, you can stack attributes:
+```csharp
+[Scoped(typeof(IOrderReader))]
+[Scoped(typeof(IOrderWriter))]
+public class OrderService : IOrderReader, IOrderWriter { }
+```
+Without stacking, AutoWire auto-discovers ALL non-system interfaces, which achieves the same result when you want all of them.
+
+**Q: My test project also uses AutoWire and I'm getting an ambiguous method error.**
+Add `[assembly: AutoWire.AutoWireOptions(MethodName = "AddTestServices")]` to your test project. This renames the generated method so each project has a unique one.
+
+**Q: Does it work with SpecFlow / xUnit / NUnit test fixtures?**
+Yes. Call `AddAutoWireServices()` first, then register stubs/fakes after — last registration wins. See the [Testing & SpecFlow](#testing--specflow) section for a full example.
 
 **Q: Can I see the generated code?**
 Yes — look in `obj/Debug/net9.0/generated/AutoWire/AutoWire.AutoWireGenerator/AutoWireServiceCollectionExtensions.g.cs`.
 
 **Q: Does it slow down my build?**
 Incremental source generators only re-run when a decorated class changes. The overhead on a clean build is negligible — far less than assembly scanning at runtime.
+
+**Q: What frameworks are supported?**
+`net6.0` · `net7.0` · `net8.0` · `net9.0` · `netstandard2.0` · `netstandard2.1` — any project using `Microsoft.Extensions.DependencyInjection`. Keyed services require .NET 8+.
 
 ---
 
