@@ -194,4 +194,33 @@ public class CloudMetricsService : IMetricsService
     public string Measure() => "cloud-metrics";
 }
 
+// ── [Factory]: factory registers itself (Singleton) and its product (Scoped) ──
 
+public interface IConnection { string ConnectionString { get; } }
+
+[Factory(typeof(IConnection))]
+public class ConnectionFactory
+{
+    public IConnection Create() => new SqliteConnection("Data Source=:memory:");
+}
+
+public class SqliteConnection : IConnection
+{
+    public SqliteConnection(string connectionString) { ConnectionString = connectionString; }
+    public string ConnectionString { get; }
+}
+
+// ── [Factory] with explicit Lifetime = Singleton on the product ───────────────
+
+public interface IConfigReader { string Read(string key); }
+
+[Factory(typeof(IConfigReader), Lifetime = "Singleton")]
+public class ConfigReaderFactory
+{
+    public IConfigReader Create() => new EnvConfigReader();
+}
+
+public class EnvConfigReader : IConfigReader
+{
+    public string Read(string key) => $"env:{key}";
+}

@@ -26,6 +26,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
     private const string OptionsFqn           = "AutoWire.AutoWireOptionsAttribute";
     private const string AutoWireScanFqn      = "AutoWire.AutoWireScanAttribute";
     private const string AutoWireExcludeFqn   = "AutoWire.AutoWireExcludeAttribute";
+    private const string FactoryFqn           = "AutoWire.FactoryAttribute";
 
     // ── Diagnostics ────────────────────────────────────────────────────────────
     private static readonly DiagnosticDescriptor AW001AbstractClass = new(
@@ -63,6 +64,15 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
         defaultSeverity: DiagnosticSeverity.Warning,
         isEnabledByDefault: true,
         description: "Inject IServiceScopeFactory and create a scope explicitly, or change the dependency's lifetime to Singleton or Transient.");
+
+    private static readonly DiagnosticDescriptor AW005AmbiguousScan = new(
+        id: "AW005",
+        title: "Type matched by multiple [AutoWireScan] configurations",
+        messageFormat: "'{0}' matches more than one [AutoWireScan] configuration. The first matching configuration wins. Consider using [AutoWireExclude] or narrowing namespace patterns to remove the ambiguity.",
+        category: "AutoWire",
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "Use [AutoWireExclude] on the type or narrow the namespace patterns so each type matches exactly one [AutoWireScan] configuration.");
 
     // ── Attribute source ───────────────────────────────────────────────────────
     private const string AttributeSource = """
@@ -279,6 +289,31 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             /// <summary>Opts this class out of convention-based scanning via <see cref="AutoWireScanAttribute"/>.</summary>
             [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
             public sealed class AutoWireExcludeAttribute : Attribute { }
+
+            /// <summary>
+            /// Registers the decorated class as a factory and its <c>Create()</c> return type as a DI service.
+            /// AutoWire emits two registrations:
+            /// <list type="bullet">
+            ///   <item>The factory class itself, with <see cref="FactoryLifetime"/> (default: Singleton).</item>
+            ///   <item>The product type (<see cref="ServiceType"/>), with <see cref="Lifetime"/> (default: Scoped),
+            ///         resolved via <c>sp =&gt; sp.GetRequiredService&lt;FactoryClass&gt;().Create()</c>.</item>
+            /// </list>
+            /// </summary>
+            /// <example>
+            /// [Factory(typeof(IDbConnection))]
+            /// public class DbConnectionFactory { public IDbConnection Create() => ...; }
+            /// </example>
+            [AttributeUsage(AttributeTargets.Class, AllowMultiple = true, Inherited = false)]
+            public sealed class FactoryAttribute : Attribute
+            {
+                /// <summary>The product type to register via the factory's <c>Create()</c> method.</summary>
+                public Type ServiceType { get; }
+                /// <summary>The DI lifetime for the <b>product</b>. Default is <c>"Scoped"</c>.</summary>
+                public string Lifetime { get; set; } = "Scoped";
+                /// <summary>The DI lifetime for the <b>factory class itself</b>. Default is <c>"Singleton"</c>.</summary>
+                public string FactoryLifetime { get; set; } = "Singleton";
+                public FactoryAttribute(Type serviceType) { ServiceType = serviceType; }
+            }
         }
         """;
 
@@ -326,6 +361,9 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
         var decoSingleton = CollectDecorators(context, DecorateSingletonFqn, "Singleton");
         var decoTransient = CollectDecorators(context, DecorateTransientFqn, "Transient");
 
+        // ── Factory pipeline ───────────────────────────────────────────────────
+        var factories = CollectFactories(context);
+
         // ── AutoWireOptions assembly attribute ────────────────────────────────
         var methodName = context.CompilationProvider.Select(static (compilation, _) =>
         {
@@ -343,6 +381,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
 
         // ── AW004: captive dependency detection ───────────────────────────────
         RegisterCaptiveDependencyDiagnostics(context);
+        RegisterAmbiguousScanDiagnostics(context);
 
         // ── Combine all registrations + generate ──────────────────────────────
         var all = scoped.Collect()
@@ -356,20 +395,21 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             .Combine(decoTransient.Collect())
             .Combine(hostedServices.Collect())
             .Combine(scannedRegs.Collect())
+            .Combine(factories.Collect())
             .Combine(methodName);
 
         context.RegisterSourceOutput(all, static (ctx, combined) =>
         {
-            var (((((((((((s, si), t), ts), tsi), tt), ds), dsi), dt), hs), sr), name) = combined;
+            var ((((((((((((s, si), t), ts), tsi), tt), ds), dsi), dt), hs), sr), f), name) = combined;
             var registrations = s.AddRange(si).AddRange(t).AddRange(ts).AddRange(tsi).AddRange(tt).AddRange(sr);
             var decorators    = ds.AddRange(dsi).AddRange(dt);
-            if (registrations.IsEmpty && decorators.IsEmpty && hs.IsEmpty) return;
+            if (registrations.IsEmpty && decorators.IsEmpty && hs.IsEmpty && f.IsEmpty) return;
 
             ReportDuplicateServiceDiagnostics(ctx, registrations);
 
             ctx.AddSource(
                 "AutoWireServiceCollectionExtensions.g.cs",
-                SourceText.From(GenerateSource(registrations, decorators, hs, name), Encoding.UTF8));
+                SourceText.From(GenerateSource(registrations, decorators, hs, f, name), Encoding.UTF8));
         });
     }
 
@@ -497,6 +537,64 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                         new[] { type.Name, paramType.Name }));
                 }
             }
+        }
+
+        return results.ToImmutable();
+    }
+
+    // ── AW005 helper ──────────────────────────────────────────────────────────
+
+    private static void RegisterAmbiguousScanDiagnostics(
+        IncrementalGeneratorInitializationContext context)
+    {
+        var ambiguous = context.CompilationProvider
+            .Select(static (compilation, _) => FindAmbiguousScans(compilation))
+            .SelectMany(static (arr, _) => arr);
+
+        context.RegisterSourceOutput(ambiguous, static (ctx, d) =>
+            ctx.ReportDiagnostic(d.Create(AW005AmbiguousScan)));
+    }
+
+    private static ImmutableArray<DiagnosticInfo> FindAmbiguousScans(Compilation compilation)
+    {
+        var scanConfigs = new List<(string Namespace, bool IncludeSubNs)>();
+        foreach (var attr in compilation.Assembly.GetAttributes())
+        {
+            if (attr.AttributeClass?.ToDisplayString() != AutoWireScanFqn) continue;
+            if (attr.ConstructorArguments.Length == 0) continue;
+            if (attr.ConstructorArguments[0].Value is not string ns || string.IsNullOrEmpty(ns)) continue;
+
+            var includeSubNs = true;
+            foreach (var na in attr.NamedArguments)
+                if (na.Key == "IncludeSubNamespaces" && na.Value.Value is bool b)
+                    includeSubNs = b;
+
+            scanConfigs.Add((ns, includeSubNs));
+        }
+
+        if (scanConfigs.Count < 2) return ImmutableArray<DiagnosticInfo>.Empty;
+
+        var results = ImmutableArray.CreateBuilder<DiagnosticInfo>();
+        foreach (var type in GetAllNamedTypesInNamespace(compilation.Assembly.GlobalNamespace))
+        {
+            if (type.IsAbstract || type.IsGenericType) continue;
+            if (TypeHasAutoWireAttribute(type, AutoWireExcludeFqn)) continue;
+            if (HasAnyRegistrationAttribute(type)) continue;
+
+            var typeNs = type.ContainingNamespace?.ToDisplayString() ?? string.Empty;
+            var matchCount = 0;
+            foreach (var (scanNs, includeSubNs) in scanConfigs)
+            {
+                var matches = includeSubNs
+                    ? typeNs == scanNs || typeNs.StartsWith(scanNs + ".", StringComparison.Ordinal)
+                    : typeNs == scanNs;
+                if (matches) matchCount++;
+            }
+
+            if (matchCount < 2) continue;
+
+            var loc = type.Locations.Length > 0 ? type.Locations[0] : Location.None;
+            results.Add(new DiagnosticInfo("AW005", loc, new[] { type.Name }));
         }
 
         return results.ToImmutable();
@@ -740,6 +838,47 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
 
     // ── Registration collection ────────────────────────────────────────────────
 
+    private static IncrementalValuesProvider<FactoryInfo> CollectFactories(
+        IncrementalGeneratorInitializationContext context)
+    {
+        return context.SyntaxProvider
+            .ForAttributeWithMetadataName(
+                FactoryFqn,
+                predicate: static (node, _) => node is ClassDeclarationSyntax,
+                transform: static (ctx, _) => TransformAllFactories(ctx))
+            .SelectMany(static (arr, _) => arr);
+    }
+
+    private static ImmutableArray<FactoryInfo> TransformAllFactories(
+        GeneratorAttributeSyntaxContext ctx)
+    {
+        if (ctx.TargetSymbol is not INamedTypeSymbol classSymbol) return ImmutableArray<FactoryInfo>.Empty;
+        if (classSymbol.IsAbstract) return ImmutableArray<FactoryInfo>.Empty;
+
+        var factoryFqn = ToFullyQualified(classSymbol);
+        var builder = ImmutableArray.CreateBuilder<FactoryInfo>(ctx.Attributes.Length);
+        foreach (var attr in ctx.Attributes)
+        {
+            if (attr.ConstructorArguments.Length == 0) continue;
+            if (attr.ConstructorArguments[0].Value is not ITypeSymbol productType) continue;
+
+            var productLifetime = "Scoped";
+            var factoryLifetime = "Singleton";
+            foreach (var na in attr.NamedArguments)
+            {
+                if (na.Key == "Lifetime" && na.Value.Value is string l &&
+                    (l == "Scoped" || l == "Singleton" || l == "Transient"))
+                    productLifetime = l;
+                else if (na.Key == "FactoryLifetime" && na.Value.Value is string fl &&
+                    (fl == "Scoped" || fl == "Singleton" || fl == "Transient"))
+                    factoryLifetime = fl;
+            }
+
+            builder.Add(new FactoryInfo(factoryFqn, ToFullyQualified(productType), productLifetime, factoryLifetime));
+        }
+        return builder.ToImmutable();
+    }
+
     private static IncrementalValuesProvider<RegistrationInfo> CollectRegistrations(
         IncrementalGeneratorInitializationContext context,
         string attributeFqn,
@@ -870,6 +1009,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
         ImmutableArray<RegistrationInfo> registrations,
         ImmutableArray<DecoratorInfo> decorators,
         ImmutableArray<string> hostedServices,
+        ImmutableArray<FactoryInfo> factories,
         string methodName)
     {
         var sb = new StringBuilder();
@@ -975,6 +1115,17 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             sb.AppendLine();
             foreach (var hs in hostedServices.OrderBy(static s => s))
                 sb.AppendLine($"        services.AddHostedService<{hs}>();");
+        }
+
+        // ── Factory registrations ──────────────────────────────────────────────
+        if (!factories.IsEmpty)
+        {
+            sb.AppendLine();
+            foreach (var f in factories.OrderBy(static f => f.FactoryType).ThenBy(static f => f.ProductType))
+            {
+                sb.AppendLine($"        services.Add{f.FactoryLifetime}<{f.FactoryType}>();");
+                sb.AppendLine($"        services.Add{f.ProductLifetime}<{f.ProductType}>(sp => sp.GetRequiredService<{f.FactoryType}>().Create());");
+            }
         }
 
         sb.AppendLine("        return services;");

@@ -124,6 +124,7 @@ public class CheckoutController(IOrderService orders, ICache cache)
 | `[TrySingleton]` | Singleton | `services.TryAddSingleton<TService, TImpl>()` |
 | `[TryTransient]` | Transient | `services.TryAddTransient<TService, TImpl>()` |
 | `[HostedService]` | Singleton | `services.AddHostedService<T>()` |
+| `[Factory(typeof(IFoo))]` | Singleton (factory) + Scoped (product) | `services.AddSingleton<FooFactory>()` + `services.AddScoped<IFoo>(sp => sp.GetRequiredService<FooFactory>().Create())` |
 
 All attributes share the same constructor overloads:
 
@@ -295,7 +296,7 @@ services.AddHostedService<global::DataSyncWorker>();
 
 ## Roslyn diagnostics
 
-AutoWire ships four built-in diagnostics that surface problems **as squiggles in the IDE** — no runtime surprises.
+AutoWire ships five built-in diagnostics that surface problems **as squiggles in the IDE** — no runtime surprises.
 
 | ID | Severity | Condition |
 |---|---|---|
@@ -303,6 +304,7 @@ AutoWire ships four built-in diagnostics that surface problems **as squiggles in
 | AW002 | ℹ Info | **Multiple non-keyed** `Add`-strategy registrations for the same service type |
 | AW003 | ❌ Error | Explicit `ServiceType` in `[Scoped(typeof(IFoo))]` is **not implemented** by the decorated class |
 | AW004 | ⚠ Warning | `[Singleton]` depends on a `[Scoped]` service — **captive dependency** that bypasses scope disposal |
+| AW005 | ⚠ Warning | A type matches **more than one** `[AutoWireScan]` configuration — first match wins |
 
 ### AW001 example
 
@@ -352,6 +354,52 @@ public class ReportingService
 ```
 
 AW004 covers both `[Singleton]` and `[TrySingleton]`, and detects scoped services registered via `[Scoped]` or `[TryScoped]`.
+
+---
+
+## Factory pattern — `[Factory]`
+
+Use `[Factory]` when a service can't be directly instantiated by the DI container — for example when it needs runtime parameters, connection strings, or configuration values that require non-trivial construction logic.
+
+```csharp
+[Factory(typeof(IDbConnection))]
+public class DbConnectionFactory
+{
+    private readonly IConfiguration _config;
+    public DbConnectionFactory(IConfiguration config) { _config = config; }
+
+    public IDbConnection Create() =>
+        new SqlConnection(_config.GetConnectionString("Default"));
+}
+```
+
+AutoWire generates two registrations:
+
+```csharp
+// The factory class itself — Singleton so it's created once
+services.AddSingleton<DbConnectionFactory>();
+
+// The product — resolved via the factory's Create() method
+services.AddScoped<IDbConnection>(sp =>
+    sp.GetRequiredService<DbConnectionFactory>().Create());
+```
+
+### Controlling lifetimes
+
+| Property | Default | What it controls |
+|---|---|---|
+| `Lifetime` | `"Scoped"` | Lifetime of the **product** (`IDbConnection`) |
+| `FactoryLifetime` | `"Singleton"` | Lifetime of the **factory class** itself |
+
+```csharp
+// Singleton product (e.g. read-once config reader)
+[Factory(typeof(IConfigReader), Lifetime = "Singleton")]
+public class ConfigReaderFactory { ... }
+
+// Transient product with scoped factory
+[Factory(typeof(IToken), Lifetime = "Transient", FactoryLifetime = "Scoped")]
+public class TokenFactory { ... }
+```
 
 ---
 
