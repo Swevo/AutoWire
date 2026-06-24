@@ -64,8 +64,23 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                 /// <summary>Registers against the specified service type only.</summary>
                 public TransientAttribute(Type serviceType) { ServiceType = serviceType; }
             }
+
+            /// <summary>Assembly-level options for AutoWire source generation.</summary>
+            [AttributeUsage(AttributeTargets.Assembly, AllowMultiple = false)]
+            public sealed class AutoWireOptionsAttribute : Attribute
+            {
+                /// <summary>
+                /// The name of the generated extension method. Defaults to <c>AddAutoWireServices</c>.
+                /// Override this when multiple projects in the same solution use AutoWire
+                /// (e.g. test projects) to avoid ambiguous extension method errors.
+                /// <example>[assembly: AutoWire.AutoWireOptions(MethodName = "AddTestServices")]</example>
+                /// </summary>
+                public string MethodName { get; set; } = "AddAutoWireServices";
+            }
         }
         """;
+
+    private const string OptionsFqn = "AutoWire.AutoWireOptionsAttribute";
 
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
@@ -76,18 +91,30 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
         var singleton = CollectRegistrations(context, SingletonFqn, "Singleton");
         var transient = CollectRegistrations(context, TransientFqn, "Transient");
 
+        var methodName = context.CompilationProvider.Select(static (compilation, _) =>
+        {
+            var attr = compilation.Assembly.GetAttributes()
+                .FirstOrDefault(static a => a.AttributeClass?.ToDisplayString() == "AutoWire.AutoWireOptionsAttribute");
+            if (attr is null) return "AddAutoWireServices";
+            foreach (var na in attr.NamedArguments)
+                if (na.Key == "MethodName" && na.Value.Value is string s && s.Length > 0)
+                    return s;
+            return "AddAutoWireServices";
+        });
+
         var all = scoped.Collect()
             .Combine(singleton.Collect())
-            .Combine(transient.Collect());
+            .Combine(transient.Collect())
+            .Combine(methodName);
 
         context.RegisterSourceOutput(all, static (ctx, combined) =>
         {
-            var ((s, si), t) = combined;
+            var (((s, si), t), name) = combined;
             var registrations = s.AddRange(si).AddRange(t);
             if (registrations.IsEmpty) return;
             ctx.AddSource(
                 "AutoWireServiceCollectionExtensions.g.cs",
-                SourceText.From(GenerateSource(registrations), Encoding.UTF8));
+                SourceText.From(GenerateSource(registrations, name), Encoding.UTF8));
         });
     }
 
@@ -108,7 +135,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
     private static RegistrationInfo? Transform(GeneratorAttributeSyntaxContext ctx, string lifetime)
     {
         if (ctx.TargetSymbol is not INamedTypeSymbol classSymbol) return null;
-        if (classSymbol.IsAbstract || classSymbol.IsGenericType) return null;
+        if (classSymbol.IsAbstract) return null;
 
         var attr = ctx.Attributes.Length > 0 ? ctx.Attributes[0] : null;
         if (attr is null) return null;
@@ -124,11 +151,43 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                 key = k;
         }
 
-        var serviceTypes = new List<string>();
+        // ── Open generic path ─────────────────────────────────────────────────
+        if (classSymbol.IsGenericType)
+        {
+            var implName = GetOpenGenericName(classSymbol);
+            var serviceTypes = new List<string>();
+
+            if (explicitServiceType is INamedTypeSymbol namedExplicit && namedExplicit.IsGenericType)
+            {
+                serviceTypes.Add(GetOpenGenericName(namedExplicit));
+            }
+            else if (explicitServiceType == null)
+            {
+                foreach (var iface in classSymbol.AllInterfaces)
+                {
+                    var ns = iface.ContainingNamespace?.ToDisplayString() ?? string.Empty;
+                    if (IsSystemNamespace(ns)) continue;
+                    if (!iface.IsGenericType) continue;
+                    // Only include interfaces whose type arguments are all class type parameters
+                    var compatible = true;
+                    foreach (var ta in iface.TypeArguments)
+                        if (!(ta is ITypeParameterSymbol)) { compatible = false; break; }
+                    if (compatible)
+                        serviceTypes.Add(GetOpenGenericName(iface));
+                }
+                if (serviceTypes.Count == 0)
+                    serviceTypes.Add(implName);
+            }
+
+            return new RegistrationInfo(implName, serviceTypes.ToImmutableArray(), lifetime, key, isOpenGeneric: true);
+        }
+
+        // ── Closed type path ──────────────────────────────────────────────────
+        var closedServiceTypes = new List<string>();
 
         if (explicitServiceType != null)
         {
-            serviceTypes.Add(ToFullyQualified(explicitServiceType));
+            closedServiceTypes.Add(ToFullyQualified(explicitServiceType));
         }
         else
         {
@@ -136,20 +195,20 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             {
                 var ns = iface.ContainingNamespace?.ToDisplayString() ?? string.Empty;
                 if (IsSystemNamespace(ns)) continue;
-                serviceTypes.Add(ToFullyQualified(iface));
+                closedServiceTypes.Add(ToFullyQualified(iface));
             }
-            if (serviceTypes.Count == 0)
-                serviceTypes.Add(ToFullyQualified(classSymbol));
+            if (closedServiceTypes.Count == 0)
+                closedServiceTypes.Add(ToFullyQualified(classSymbol));
         }
 
         return new RegistrationInfo(
             ToFullyQualified(classSymbol),
-            serviceTypes.ToImmutableArray(),
+            closedServiceTypes.ToImmutableArray(),
             lifetime,
             key);
     }
 
-    private static string GenerateSource(ImmutableArray<RegistrationInfo> registrations)
+    private static string GenerateSource(ImmutableArray<RegistrationInfo> registrations, string methodName)
     {
         var sb = new StringBuilder();
         sb.AppendLine("// <auto-generated by AutoWire/>");
@@ -165,7 +224,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
         sb.AppendLine("    /// Registers all services decorated with");
         sb.AppendLine("    /// <see cref=\"ScopedAttribute\"/>, <see cref=\"SingletonAttribute\"/>, or <see cref=\"TransientAttribute\"/>.");
         sb.AppendLine("    /// </summary>");
-        sb.AppendLine("    public static global::Microsoft.Extensions.DependencyInjection.IServiceCollection AddAutoWireServices(");
+        sb.AppendLine("    public static global::Microsoft.Extensions.DependencyInjection.IServiceCollection " + methodName + "(");
         sb.AppendLine("        this global::Microsoft.Extensions.DependencyInjection.IServiceCollection services)");
         sb.AppendLine("    {");
 
@@ -173,22 +232,37 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
         {
             foreach (var svc in reg.ServiceTypes)
             {
-                if (reg.Key != null)
+                if (reg.IsOpenGeneric)
                 {
-                    // Keyed registration
-                    var method = $"AddKeyed{reg.Lifetime}";
-                    if (svc == reg.ImplementationType)
-                        sb.AppendLine($"        services.{method}<{svc}>(\"{reg.Key}\");");
+                    // Open generic: must use typeof() overloads
+                    if (reg.Key != null)
+                    {
+                        if (svc == reg.ImplementationType)
+                            sb.AppendLine($"        services.AddKeyed{reg.Lifetime}(typeof({svc}), \"{reg.Key}\");");
+                        else
+                            sb.AppendLine($"        services.AddKeyed{reg.Lifetime}(typeof({svc}), \"{reg.Key}\", typeof({reg.ImplementationType}));");
+                    }
                     else
-                        sb.AppendLine($"        services.{method}<{svc}, {reg.ImplementationType}>(\"{reg.Key}\");");
+                    {
+                        if (svc == reg.ImplementationType)
+                            sb.AppendLine($"        services.Add{reg.Lifetime}(typeof({svc}));");
+                        else
+                            sb.AppendLine($"        services.Add{reg.Lifetime}(typeof({svc}), typeof({reg.ImplementationType}));");
+                    }
+                }
+                else if (reg.Key != null)
+                {
+                    if (svc == reg.ImplementationType)
+                        sb.AppendLine($"        services.AddKeyed{reg.Lifetime}<{svc}>(\"{reg.Key}\");");
+                    else
+                        sb.AppendLine($"        services.AddKeyed{reg.Lifetime}<{svc}, {reg.ImplementationType}>(\"{reg.Key}\");");
                 }
                 else
                 {
-                    var method = $"Add{reg.Lifetime}";
                     if (svc == reg.ImplementationType)
-                        sb.AppendLine($"        services.{method}<{svc}>();");
+                        sb.AppendLine($"        services.Add{reg.Lifetime}<{svc}>();");
                     else
-                        sb.AppendLine($"        services.{method}<{svc}, {reg.ImplementationType}>();");
+                        sb.AppendLine($"        services.Add{reg.Lifetime}<{svc}, {reg.ImplementationType}>();");
                 }
             }
         }
@@ -204,4 +278,18 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
 
     private static string ToFullyQualified(ITypeSymbol symbol) =>
         symbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+
+    /// <summary>
+    /// Returns the open-generic typeof() string for a generic type,
+    /// e.g. global::MyApp.IRepository&lt;&gt; or global::MyApp.IMultiMap&lt;,&gt;
+    /// </summary>
+    private static string GetOpenGenericName(INamedTypeSymbol symbol)
+    {
+        var ns = symbol.ContainingNamespace is { IsGlobalNamespace: false } nsSym
+            ? nsSym.ToDisplayString()
+            : null;
+        var commas = new string(',', symbol.Arity - 1);
+        var prefix = ns != null ? $"global::{ns}." : "global::";
+        return $"{prefix}{symbol.Name}<{commas}>";
+    }
 }

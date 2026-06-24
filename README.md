@@ -137,6 +137,38 @@ All three attributes share the same constructor overloads:
 [Scoped(typeof(IMyService), Key = "keyName")]
 ```
 
+
+---
+
+## Open generic types
+
+AutoWire fully supports open generic registrations. The correct `typeof()` overload is generated automatically — no reflection needed.
+
+```csharp
+// Auto-discovers compatible generic interfaces
+[Scoped]
+public class Repository<T> : IRepository<T> { }
+// → services.AddScoped(typeof(IRepository<>), typeof(Repository<>));
+
+// Explicit service type
+[Singleton(typeof(IReadOnlyRepository<>))]
+public class CachedRepository<T> : IRepository<T>, IReadOnlyRepository<T> { }
+// → services.AddSingleton(typeof(IReadOnlyRepository<>), typeof(CachedRepository<>));
+
+// No interface — registers as concrete open generic
+[Transient]
+public class EventProcessor<T> { }
+// → services.AddTransient(typeof(EventProcessor<>));
+```
+
+Resolving closed generics from DI works automatically:
+
+```csharp
+// All of these work after a single AddAutoWireServices() call:
+provider.GetRequiredService<IRepository<Order>>();
+provider.GetRequiredService<IRepository<Product>>();
+provider.GetRequiredService<EventProcessor<EmailMessage>>();
+```
 ---
 
 ## How it works
@@ -246,6 +278,62 @@ Incremental source generators only re-run when a decorated class changes. The ov
 ---
 
 
+
+---
+
+## Testing & SpecFlow
+
+### Replacing implementations in tests
+
+Microsoft DI uses **last-registration-wins**, so you can always override production services after calling `AddAutoWireServices()`:
+
+```csharp
+// SpecFlow [BeforeScenario] hook or xUnit fixture
+services.AddAutoWireServices();          // production registrations
+
+services.AddScoped<IOrderService, FakeOrderService>();   // overrides — last wins
+services.AddScoped<IEmailSender, NullEmailSender>();
+```
+
+### Fixing ambiguous method errors in test projects
+
+If your **test project** also references AutoWire and decorates test doubles with `[Scoped]` etc., both assemblies generate `AddAutoWireServices()`, causing an ambiguous extension method error.
+
+Fix it by adding one line to your test project:
+
+```csharp
+// Any .cs file in the test project, e.g. GlobalUsings.cs
+[assembly: AutoWire.AutoWireOptions(MethodName = "AddTestServices")]
+```
+
+Now each project has a distinct method:
+
+```csharp
+services.AddAutoWireServices();  // production project
+services.AddTestServices();      // test project — no ambiguity
+```
+
+### Full SpecFlow example
+
+```csharp
+// SpecFlow startup class
+public class TestDependencies : IDependencyInjectionContainerBuilder
+{
+    public IServiceCollection CreateServiceCollection()
+    {
+        var services = new ServiceCollection();
+
+        // Register all production services
+        services.AddAutoWireServices();
+
+        // Swap specific services with test doubles
+        services.AddScoped<IPaymentGateway, StubPaymentGateway>();
+        services.AddScoped<IEmailSender, SpyEmailSender>();
+
+        return services;
+    }
+}
+```
 ---
 
 ## 💼 Need .NET consulting?

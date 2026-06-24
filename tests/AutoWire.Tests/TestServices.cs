@@ -29,3 +29,24 @@ public class PrimaryMessageBus : IMessageBus { }
 // 6. Singleton with no interface — registers as concrete type
 [Singleton]
 public class AppSettings { }
+
+// 7. Open generic - auto-discovers compatible generic interface
+public interface IRepository<T> { T? Find(int id); }
+[Scoped]
+public class Repository<T> : IRepository<T> { public T? Find(int id) => default; }
+// → services.AddScoped(typeof(IRepository<>), typeof(Repository<>));
+
+// 8. Open generic - explicit service type (IReadOnlyRepo only, not IRepository)
+public interface IReadOnlyRepository<T> { }
+[Singleton(typeof(IReadOnlyRepository<>))]
+public class CachedRepository<T> : IRepository<T>, IReadOnlyRepository<T>
+{
+    public T? Find(int id) => default;
+}
+// → services.AddSingleton(typeof(IReadOnlyRepository<>), typeof(CachedRepository<>));
+
+// 9. Open generic - no interface, registers as concrete type
+[Transient]
+public class EventProcessor<T> { }
+// → services.AddTransient(typeof(EventProcessor<>));
+

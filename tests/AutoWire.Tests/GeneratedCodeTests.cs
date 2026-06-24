@@ -112,4 +112,53 @@ public class GeneratedCodeTests
         var result = services.AddAutoWireServices();
         Assert.Same(services, result);
     }
+
+    // ── Open generic tests ────────────────────────────────────────────────────
+
+    [Fact]
+    public void OpenGeneric_Scoped_ClosesCorrectly()
+    {
+        using var provider = BuildProvider();
+        using var scope = provider.CreateScope();
+        var repo = scope.ServiceProvider.GetService<IRepository<string>>();
+        Assert.NotNull(repo);
+        Assert.IsType<Repository<string>>(repo);
+    }
+
+    [Fact]
+    public void OpenGeneric_Scoped_DifferentTypeArgs_ResolveSeparately()
+    {
+        using var provider = BuildProvider();
+        using var scope = provider.CreateScope();
+        Assert.NotNull(scope.ServiceProvider.GetService<IRepository<int>>());
+        Assert.NotNull(scope.ServiceProvider.GetService<IRepository<string>>());
+    }
+
+    [Fact]
+    public void OpenGeneric_Singleton_WithExplicitServiceType_RegistersOnlyAsThat()
+    {
+        using var provider = BuildProvider();
+        Assert.NotNull(provider.GetService<IReadOnlyRepository<int>>());
+        Assert.IsType<CachedRepository<int>>(provider.GetService<IReadOnlyRepository<int>>());
+        // CachedRepository should NOT be registered as IRepository (explicit type was given)
+        // IRepository<int> resolves to Repository<int> instead
+        Assert.IsType<Repository<int>>(provider.GetService<IRepository<int>>());
+    }
+
+    [Fact]
+    public void OpenGeneric_Transient_NoConcrete_RegistersAsConcrete()
+    {
+        using var provider = BuildProvider();
+        Assert.NotNull(provider.GetService<EventProcessor<string>>());
+        Assert.IsType<EventProcessor<string>>(provider.GetService<EventProcessor<string>>());
+    }
+
+    [Fact]
+    public void OpenGeneric_Transient_IsNewInstancePerResolve()
+    {
+        using var provider = BuildProvider();
+        var a = provider.GetService<EventProcessor<string>>();
+        var b = provider.GetService<EventProcessor<string>>();
+        Assert.NotSame(a, b);
+    }
 }
