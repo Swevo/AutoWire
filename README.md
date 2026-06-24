@@ -115,13 +115,16 @@ public class CheckoutController(IOrderService orders, ICache cache)
 
 ## Attribute reference
 
-| Attribute | DI lifetime | Equivalent |
+| Attribute | DI lifetime | Generated call |
 |---|---|---|
 | `[Scoped]` | Scoped | `services.AddScoped<TService, TImpl>()` |
 | `[Singleton]` | Singleton | `services.AddSingleton<TService, TImpl>()` |
 | `[Transient]` | Transient | `services.AddTransient<TService, TImpl>()` |
+| `[TryScoped]` | Scoped | `services.TryAddScoped<TService, TImpl>()` |
+| `[TrySingleton]` | Singleton | `services.TryAddSingleton<TService, TImpl>()` |
+| `[TryTransient]` | Transient | `services.TryAddTransient<TService, TImpl>()` |
 
-All three attributes share the same constructor overloads:
+All attributes share the same constructor overloads:
 
 ```csharp
 // Auto-discover all non-system interfaces
@@ -137,8 +140,118 @@ All three attributes share the same constructor overloads:
 [Scoped(typeof(IMyService), Key = "keyName")]
 ```
 
+---
+
+## Multiple attributes on one class
+
+All attributes support `AllowMultiple = true`. Use this to register a single class against **several explicitly-specified interfaces**:
+
+```csharp
+// Without AllowMultiple you'd need a single attribute and auto-discovery.
+// With AllowMultiple you can pick exactly which interfaces win:
+[Scoped(typeof(IOrderReader))]
+[Scoped(typeof(IOrderWriter))]
+public class OrderService : IOrderReader, IOrderWriter, IDisposable { }
+// → services.AddScoped<IOrderReader, OrderService>();
+// → services.AddScoped<IOrderWriter, OrderService>();
+// IDisposable is excluded from both registrations.
+```
 
 ---
+
+## DuplicateStrategy
+
+Control what happens when the same service type is registered more than once using the `Duplicate` property:
+
+```csharp
+public enum DuplicateStrategy
+{
+    Add,     // (default) AddScoped — last registration wins
+    Skip,    // TryAddScoped — skipped if service type already registered
+    Replace  // RemoveAll + AddScoped — removes all prior registrations, then adds
+}
+```
+
+### Replace — make the winner explicit
+
+```csharp
+[Scoped]
+public class DefaultOrderService : IOrderService { }   // registered first
+
+[Scoped(Duplicate = DuplicateStrategy.Replace)]
+public class PremiumOrderService : IOrderService { }   // removes prior, registers itself
+// → services.AddScoped<IOrderService, DefaultOrderService>();   // then...
+// → services.RemoveAll<IOrderService>();
+// → services.AddScoped<IOrderService, PremiumOrderService>();
+// Result: only PremiumOrderService is registered for IOrderService.
+```
+
+### Skip — provide a default, respect consumer overrides
+
+```csharp
+[Scoped]
+public class ProductionMessageBus : IMessageBus { }   // always registered
+
+[Scoped(Duplicate = DuplicateStrategy.Skip)]
+public class FallbackMessageBus : IMessageBus { }     // skipped — IMessageBus already taken
+```
+
+---
+
+## TryScoped / TrySingleton / TryTransient
+
+Convenience attributes that always use TryAdd semantics — ideal for **NuGet library authors** who want to provide sensible defaults without overriding the consumer's registrations:
+
+```csharp
+// In your library:
+[TryScoped]
+public class DefaultRetryPolicy : IRetryPolicy { }
+// → services.TryAddScoped<IRetryPolicy, DefaultRetryPolicy>();
+
+// Consumer's host:
+services.AddAutoWireServices();           // DefaultRetryPolicy registered
+services.AddScoped<IRetryPolicy, AggressiveRetryPolicy>(); // consumer overrides — fine
+
+// Or consumer pre-registers before your library:
+services.AddScoped<IRetryPolicy, AggressiveRetryPolicy>(); // registered first
+services.AddAutoWireServices();           // TryAdd is skipped — no override
+```
+
+`[TryScoped]` / `[TrySingleton]` / `[TryTransient]` are equivalent to `[Scoped(Duplicate = DuplicateStrategy.Skip)]`.
+
+---
+
+## Roslyn diagnostics
+
+AutoWire ships two built-in diagnostics that surface problems **as squiggles in the IDE** — no runtime surprises.
+
+| ID | Severity | Condition |
+|---|---|---|
+| AW001 | ⚠ Warning | `[Scoped]` / `[TryScoped]` etc. applied to an **abstract class** — the class will never be registered |
+| AW002 | ℹ Info | **Multiple non-keyed** `Add`-strategy registrations for the same service type — last wins, which may be unintentional |
+
+### AW001 example
+
+```csharp
+// ⚠ AW001: Abstract class 'BaseHandler' decorated with [Scoped] will not be registered.
+[Scoped]
+public abstract class BaseHandler : IHandler { }
+```
+
+### AW002 example
+
+```csharp
+// ℹ AW002: Multiple non-keyed implementations are registered for 'IOrderService'.
+[Scoped] public class OrderServiceV1 : IOrderService { }
+[Scoped] public class OrderServiceV2 : IOrderService { }
+
+// Suppress by being explicit:
+[Scoped] public class OrderServiceV1 : IOrderService { }
+[Scoped(Duplicate = DuplicateStrategy.Replace)] public class OrderServiceV2 : IOrderService { }
+// AW002 suppressed — intent is clear.
+```
+
+
 
 ## Open generic types
 
@@ -264,10 +377,10 @@ Works with ASP.NET Core, Worker Services, MAUI, Blazor, console apps — any pro
 ## FAQ
 
 **Q: What if I have two services implementing the same interface?**
-AutoWire registers each independently. The last registration wins for non-keyed services (standard .NET DI behaviour). Use keyed services to disambiguate.
+AutoWire registers each independently and emits an AW002 info diagnostic. Use `DuplicateStrategy.Replace` to make the winner explicit, or keyed services to disambiguate.
 
 **Q: Does it work with open generic types?**
-Not in v1 — generic classes are skipped. Register generic services manually.
+Yes — AutoWire auto-discovers compatible open generic interfaces and emits `services.AddScoped(typeof(IRepo<>), typeof(Repo<>))`. See the [Open generic types](#open-generic-types) section.
 
 **Q: Can I see the generated code?**
 Yes — look in `obj/Debug/net9.0/generated/AutoWire/AutoWire.AutoWireGenerator/AutoWireServiceCollectionExtensions.g.cs`.

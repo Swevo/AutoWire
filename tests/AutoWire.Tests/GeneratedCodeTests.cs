@@ -161,4 +161,81 @@ public class GeneratedCodeTests
         var b = provider.GetService<EventProcessor<string>>();
         Assert.NotSame(a, b);
     }
+
+    // ── AllowMultiple tests ───────────────────────────────────────────────────
+
+    [Fact]
+    public void AllowMultiple_RegistersAgainstBothExplicitInterfaces()
+    {
+        using var provider = BuildProvider();
+        Assert.IsType<ContentService>(provider.GetService<IFeedService>());
+        Assert.IsType<ContentService>(provider.GetService<IPublisherService>());
+    }
+
+    [Fact]
+    public void AllowMultiple_BothInterfacesResolvable()
+    {
+        using var provider = BuildProvider();
+        Assert.NotNull(provider.GetService<IFeedService>());
+        Assert.NotNull(provider.GetService<IPublisherService>());
+    }
+
+    // ── DuplicateStrategy.Replace tests ──────────────────────────────────────
+
+    [Fact]
+    public void DuplicateStrategy_Replace_WinsOverPreviousRegistration()
+    {
+        using var provider = BuildProvider();
+        var svc = provider.GetService<IReplaceable>();
+        Assert.NotNull(svc);
+        Assert.IsType<ReplacementReplaceable>(svc);
+    }
+
+    [Fact]
+    public void DuplicateStrategy_Replace_OriginalNoLongerRegistered()
+    {
+        using var provider = BuildProvider();
+        var all = provider.GetServices<IReplaceable>().ToList();
+        Assert.Single(all);
+        Assert.IsType<ReplacementReplaceable>(all[0]);
+    }
+
+    // ── DuplicateStrategy.Skip tests ─────────────────────────────────────────
+
+    [Fact]
+    public void DuplicateStrategy_Skip_FirstAddRegistrationWins()
+    {
+        using var provider = BuildProvider();
+        Assert.IsType<PrimarySkippable>(provider.GetService<ISkippable>());
+    }
+
+    [Fact]
+    public void DuplicateStrategy_Skip_FallbackNotRegisteredAsSecondary()
+    {
+        using var provider = BuildProvider();
+        var all = provider.GetServices<ISkippable>().ToList();
+        Assert.Single(all);
+        Assert.IsType<PrimarySkippable>(all[0]);
+    }
+
+    // ── TryScoped tests ───────────────────────────────────────────────────────
+
+    [Fact]
+    public void TryScoped_RegistersWhenServiceNotPreRegistered()
+    {
+        var services = new ServiceCollection();
+        services.AddAutoWireServices();
+        using var provider = services.BuildServiceProvider();
+        Assert.IsType<DefaultTryable>(provider.GetService<ITryable>());
+    }
+
+    [Fact]
+    public void TryScoped_DoesNotOverrideManualRegistration()
+    {
+        var services = new ServiceCollection();
+        services.AddScoped<ITryable, MockTryable>(); // registered before AutoWire
+        services.AddAutoWireServices();              // [TryScoped] on DefaultTryable should be skipped
+        using var provider = services.BuildServiceProvider();
+        Assert.IsType<MockTryable>(provider.GetService<ITryable>());
+    }
 }

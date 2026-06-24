@@ -10,14 +10,22 @@ internal sealed class RegistrationInfo
     public string Lifetime { get; }
     public string? Key { get; }
     public bool IsOpenGeneric { get; }
+    public DuplicateStrategy DuplicateStrategy { get; }
 
-    public RegistrationInfo(string implementationType, ImmutableArray<string> serviceTypes, string lifetime, string? key, bool isOpenGeneric = false)
+    public RegistrationInfo(
+        string implementationType,
+        ImmutableArray<string> serviceTypes,
+        string lifetime,
+        string? key,
+        bool isOpenGeneric = false,
+        DuplicateStrategy duplicateStrategy = DuplicateStrategy.Add)
     {
         ImplementationType = implementationType;
         ServiceTypes = serviceTypes;
         Lifetime = lifetime;
         Key = key;
         IsOpenGeneric = isOpenGeneric;
+        DuplicateStrategy = duplicateStrategy;
     }
 
     public override bool Equals(object? obj) =>
@@ -26,7 +34,8 @@ internal sealed class RegistrationInfo
         SequenceEqual(ServiceTypes, other.ServiceTypes) &&
         Lifetime == other.Lifetime &&
         Key == other.Key &&
-        IsOpenGeneric == other.IsOpenGeneric;
+        IsOpenGeneric == other.IsOpenGeneric &&
+        DuplicateStrategy == other.DuplicateStrategy;
 
     public override int GetHashCode()
     {
@@ -36,6 +45,7 @@ internal sealed class RegistrationInfo
             h = h * 397 ^ Lifetime.GetHashCode();
             h = h * 397 ^ (Key?.GetHashCode() ?? 0);
             h = h * 397 ^ IsOpenGeneric.GetHashCode();
+            h = h * 397 ^ DuplicateStrategy.GetHashCode();
             foreach (var s in ServiceTypes)
                 h = h * 397 ^ s.GetHashCode();
             return h;

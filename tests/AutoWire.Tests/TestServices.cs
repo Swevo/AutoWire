@@ -50,3 +50,40 @@ public class CachedRepository<T> : IRepository<T>, IReadOnlyRepository<T>
 public class EventProcessor<T> { }
 // → services.AddTransient(typeof(EventProcessor<>));
 
+// ── AllowMultiple: one class registered against two explicit interfaces ────────
+
+public interface IFeedService { void Feed(); }
+public interface IPublisherService { void Publish(); }
+[Scoped(typeof(IFeedService))]
+[Scoped(typeof(IPublisherService))]
+public class ContentService : IFeedService, IPublisherService
+{
+    public void Feed() { }
+    public void Publish() { }
+}
+
+// ── DuplicateStrategy.Replace: ReplacementReplaceable wins over OriginalReplaceable ──
+
+public interface IReplaceable { }
+[Scoped]
+public class OriginalReplaceable : IReplaceable { }
+[Scoped(Duplicate = DuplicateStrategy.Replace)]
+public class ReplacementReplaceable : IReplaceable { }
+
+// ── DuplicateStrategy.Skip: PrimarySkippable wins, FallbackSkippable is skipped ──
+
+public interface ISkippable { }
+[Scoped]
+public class PrimarySkippable : ISkippable { }
+[Scoped(Duplicate = DuplicateStrategy.Skip)]
+public class FallbackSkippable : ISkippable { }
+
+// ── TryScoped: DefaultTryable is a library-style fallback ─────────────────────
+
+public interface ITryable { string GetValue(); }
+[TryScoped]
+public class DefaultTryable : ITryable { public string GetValue() => "default"; }
+// Used to override DefaultTryable in TryScoped tests — no AutoWire attribute:
+public class MockTryable : ITryable { public string GetValue() => "mock"; }
+
+
