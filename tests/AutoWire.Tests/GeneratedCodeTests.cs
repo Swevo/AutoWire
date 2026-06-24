@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Hosting;
 public class GeneratedCodeTests
 {
     private static ServiceProvider BuildProvider()
@@ -271,5 +272,26 @@ public class GeneratedCodeTests
         var a = scope.ServiceProvider.GetRequiredService<IGreeter>();
         var b = scope.ServiceProvider.GetRequiredService<IGreeter>();
         Assert.Same(a, b);
+    }
+
+    // ── HostedService tests ───────────────────────────────────────────────────
+
+    [Fact]
+    public void HostedService_RegisteredAsIHostedService()
+    {
+        using var provider = BuildProvider();
+        var workers = provider.GetServices<IHostedService>().ToList();
+        Assert.Contains(workers, w => w is TestBackgroundWorker);
+    }
+
+    [Fact]
+    public void HostedService_MultipleCallsStillRegistersOnce()
+    {
+        var services = new ServiceCollection();
+        services.AddAutoWireServices();
+        services.AddAutoWireServices(); // idempotent — AddHostedService uses TryAddEnumerable
+        using var provider = services.BuildServiceProvider();
+        var count = provider.GetServices<IHostedService>().Count(w => w is TestBackgroundWorker);
+        Assert.Equal(1, count);
     }
 }

@@ -1,4 +1,5 @@
 // Services used to verify generator output — each case exercises a distinct code path.
+using Microsoft.Extensions.Hosting;
 
 // 1. Scoped registered against single implemented interface (auto-discovery)
 public interface IOrderService { string GetStatus(); }
@@ -102,6 +103,14 @@ public class PoliteGreeter : IGreeter
     private readonly IGreeter _inner;
     public PoliteGreeter(IGreeter inner) { _inner = inner; }
     public string Greet(string name) => $"[politely] {_inner.Greet(name)}";
+}
+
+// ── HostedService: background worker registration ─────────────────────────────
+
+[HostedService]
+public class TestBackgroundWorker : BackgroundService
+{
+    protected override Task ExecuteAsync(CancellationToken stoppingToken) => Task.CompletedTask;
 }
 
 

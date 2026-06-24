@@ -13,16 +13,17 @@ namespace AutoWire;
 public sealed class AutoWireGenerator : IIncrementalGenerator
 {
     // ── Attribute FQNs ─────────────────────────────────────────────────────────
-    private const string ScopedFqn       = "AutoWire.ScopedAttribute";
-    private const string SingletonFqn    = "AutoWire.SingletonAttribute";
-    private const string TransientFqn    = "AutoWire.TransientAttribute";
-    private const string TryScopedFqn    = "AutoWire.TryScopedAttribute";
-    private const string TrySingletonFqn = "AutoWire.TrySingletonAttribute";
-    private const string TryTransientFqn = "AutoWire.TryTransientAttribute";
+    private const string ScopedFqn            = "AutoWire.ScopedAttribute";
+    private const string SingletonFqn         = "AutoWire.SingletonAttribute";
+    private const string TransientFqn         = "AutoWire.TransientAttribute";
+    private const string TryScopedFqn         = "AutoWire.TryScopedAttribute";
+    private const string TrySingletonFqn      = "AutoWire.TrySingletonAttribute";
+    private const string TryTransientFqn      = "AutoWire.TryTransientAttribute";
     private const string DecorateScopedFqn    = "AutoWire.DecorateScopedAttribute";
     private const string DecorateSingletonFqn = "AutoWire.DecorateSingletonAttribute";
     private const string DecorateTransientFqn = "AutoWire.DecorateTransientAttribute";
-    private const string OptionsFqn      = "AutoWire.AutoWireOptionsAttribute";
+    private const string HostedServiceFqn     = "AutoWire.HostedServiceAttribute";
+    private const string OptionsFqn           = "AutoWire.AutoWireOptionsAttribute";
 
     // ── Diagnostics ────────────────────────────────────────────────────────────
     private static readonly DiagnosticDescriptor AW001AbstractClass = new(
@@ -42,6 +43,15 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
         defaultSeverity: DiagnosticSeverity.Info,
         isEnabledByDefault: true,
         description: "Use keyed services or DuplicateStrategy.Replace/Skip to make your intent clear.");
+
+    private static readonly DiagnosticDescriptor AW003ServiceTypeMismatch = new(
+        id: "AW003",
+        title: "Class does not implement the specified service type",
+        messageFormat: "'{0}' does not implement '{1}'. The registration will fail at runtime.",
+        category: "AutoWire",
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true,
+        description: "Ensure the class implements the type passed to the attribute constructor.");
 
     // ── Attribute source ───────────────────────────────────────────────────────
     private const string AttributeSource = """
@@ -159,6 +169,15 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             }
 
             /// <summary>
+            /// Registers the decorated class as a hosted background service via
+            /// <c>services.AddHostedService&lt;T&gt;()</c>.
+            /// The class must implement <c>Microsoft.Extensions.Hosting.IHostedService</c>
+            /// or extend <c>Microsoft.Extensions.Hosting.BackgroundService</c>.
+            /// </summary>
+            [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
+            public sealed class HostedServiceAttribute : Attribute { }
+
+            /// <summary>
             /// Wraps the existing <b>scoped</b> registration for <paramref name="serviceType"/> with this decorator class.
             /// The inner implementation is self-registered so that the decorator can be injected with the concrete type.
             /// </summary>
@@ -223,6 +242,21 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
         RegisterAbstractDiagnostics(context, DecorateScopedFqn,    "DecorateScoped");
         RegisterAbstractDiagnostics(context, DecorateSingletonFqn, "DecorateSingleton");
         RegisterAbstractDiagnostics(context, DecorateTransientFqn, "DecorateTransient");
+        RegisterAbstractDiagnostics(context, HostedServiceFqn,     "HostedService");
+
+        // ── AW003: service type not implemented ───────────────────────────────
+        RegisterServiceTypeMismatchDiagnostics(context, ScopedFqn);
+        RegisterServiceTypeMismatchDiagnostics(context, SingletonFqn);
+        RegisterServiceTypeMismatchDiagnostics(context, TransientFqn);
+        RegisterServiceTypeMismatchDiagnostics(context, TryScopedFqn);
+        RegisterServiceTypeMismatchDiagnostics(context, TrySingletonFqn);
+        RegisterServiceTypeMismatchDiagnostics(context, TryTransientFqn);
+        RegisterServiceTypeMismatchDiagnostics(context, DecorateScopedFqn);
+        RegisterServiceTypeMismatchDiagnostics(context, DecorateSingletonFqn);
+        RegisterServiceTypeMismatchDiagnostics(context, DecorateTransientFqn);
+
+        // ── Hosted service pipeline ────────────────────────────────────────────
+        var hostedServices = CollectHostedServices(context);
 
         // ── Decorator pipelines ────────────────────────────────────────────────
         var decoScoped    = CollectDecorators(context, DecorateScopedFqn,    "Scoped");
@@ -251,20 +285,21 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             .Combine(decoScoped.Collect())
             .Combine(decoSingleton.Collect())
             .Combine(decoTransient.Collect())
+            .Combine(hostedServices.Collect())
             .Combine(methodName);
 
         context.RegisterSourceOutput(all, static (ctx, combined) =>
         {
-            var (((((((((s, si), t), ts), tsi), tt), ds), dsi), dt), name) = combined;
+            var ((((((((((s, si), t), ts), tsi), tt), ds), dsi), dt), hs), name) = combined;
             var registrations = s.AddRange(si).AddRange(t).AddRange(ts).AddRange(tsi).AddRange(tt);
             var decorators    = ds.AddRange(dsi).AddRange(dt);
-            if (registrations.IsEmpty && decorators.IsEmpty) return;
+            if (registrations.IsEmpty && decorators.IsEmpty && hs.IsEmpty) return;
 
             ReportDuplicateServiceDiagnostics(ctx, registrations);
 
             ctx.AddSource(
                 "AutoWireServiceCollectionExtensions.g.cs",
-                SourceText.From(GenerateSource(registrations, decorators, name), Encoding.UTF8));
+                SourceText.From(GenerateSource(registrations, decorators, hs, name), Encoding.UTF8));
         });
     }
 
@@ -290,6 +325,81 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
 
         context.RegisterSourceOutput(abstracts, static (ctx, d) =>
             ctx.ReportDiagnostic(d.Create(AW001AbstractClass)));
+    }
+
+    // ── AW003 helper ──────────────────────────────────────────────────────────
+
+    private static void RegisterServiceTypeMismatchDiagnostics(
+        IncrementalGeneratorInitializationContext context,
+        string attributeFqn)
+    {
+        var mismatches = context.SyntaxProvider
+            .ForAttributeWithMetadataName(
+                attributeFqn,
+                predicate: static (node, _) => node is ClassDeclarationSyntax,
+                transform: static (ctx, _) =>
+                {
+                    if (ctx.TargetSymbol is not INamedTypeSymbol classSymbol) return null;
+
+                    foreach (var attr in ctx.Attributes)
+                    {
+                        if (attr.ConstructorArguments.Length == 0) continue;
+                        if (attr.ConstructorArguments[0].Value is not ITypeSymbol serviceType) continue;
+                        if (!ImplementsServiceType(classSymbol, serviceType))
+                        {
+                            var loc = classSymbol.Locations.Length > 0 ? classSymbol.Locations[0] : Location.None;
+                            return new DiagnosticInfo("AW003", loc,
+                                new[] { classSymbol.Name, serviceType.ToDisplayString() });
+                        }
+                    }
+                    return null;
+                })
+            .Where(static d => d is not null)
+            .Select(static (d, _) => d!);
+
+        context.RegisterSourceOutput(mismatches, static (ctx, d) =>
+            ctx.ReportDiagnostic(d.Create(AW003ServiceTypeMismatch)));
+    }
+
+    private static bool ImplementsServiceType(INamedTypeSymbol classSymbol, ITypeSymbol serviceType)
+    {
+        // Self-registration
+        if (SymbolEqualityComparer.Default.Equals(classSymbol.OriginalDefinition, serviceType.OriginalDefinition))
+            return true;
+
+        // Interface (direct or transitive, including from base classes)
+        foreach (var iface in classSymbol.AllInterfaces)
+            if (SymbolEqualityComparer.Default.Equals(iface.OriginalDefinition, serviceType.OriginalDefinition))
+                return true;
+
+        // Base type chain (for abstract base class registrations)
+        var baseType = classSymbol.BaseType;
+        while (baseType != null)
+        {
+            if (SymbolEqualityComparer.Default.Equals(baseType.OriginalDefinition, serviceType.OriginalDefinition))
+                return true;
+            baseType = baseType.BaseType;
+        }
+
+        return false;
+    }
+
+    // ── Hosted service collection ──────────────────────────────────────────────
+
+    private static IncrementalValuesProvider<string> CollectHostedServices(
+        IncrementalGeneratorInitializationContext context)
+    {
+        return context.SyntaxProvider
+            .ForAttributeWithMetadataName(
+                HostedServiceFqn,
+                predicate: static (node, _) => node is ClassDeclarationSyntax,
+                transform: static (ctx, _) =>
+                {
+                    if (ctx.TargetSymbol is not INamedTypeSymbol { IsAbstract: false } sym) return null;
+                    return sym.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+                })
+            .Where(static s => s is not null)
+            .Select(static (s, _) => s!);
     }
 
     // ── AW002 helper ──────────────────────────────────────────────────────────
@@ -469,6 +579,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
     private static string GenerateSource(
         ImmutableArray<RegistrationInfo> registrations,
         ImmutableArray<DecoratorInfo> decorators,
+        ImmutableArray<string> hostedServices,
         string methodName)
     {
         var sb = new StringBuilder();
@@ -518,6 +629,14 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                 sb.AppendLine();
                 EmitDecorator(sb, dec, serviceToConcreteMap, idx++);
             }
+        }
+
+        // ── Hosted services ────────────────────────────────────────────────────
+        if (!hostedServices.IsEmpty)
+        {
+            sb.AppendLine();
+            foreach (var hs in hostedServices.OrderBy(static s => s))
+                sb.AppendLine($"        services.AddHostedService<{hs}>();");
         }
 
         sb.AppendLine("        return services;");

@@ -123,6 +123,7 @@ public class CheckoutController(IOrderService orders, ICache cache)
 | `[TryScoped]` | Scoped | `services.TryAddScoped<TService, TImpl>()` |
 | `[TrySingleton]` | Singleton | `services.TryAddSingleton<TService, TImpl>()` |
 | `[TryTransient]` | Transient | `services.TryAddTransient<TService, TImpl>()` |
+| `[HostedService]` | Singleton | `services.AddHostedService<T>()` |
 
 All attributes share the same constructor overloads:
 
@@ -221,14 +222,52 @@ services.AddAutoWireServices();           // TryAdd is skipped — no override
 
 ---
 
+## Hosted services (Worker Services)
+
+`[HostedService]` registers a background service with a single attribute — no manual `AddHostedService<T>()` required.
+
+```csharp
+using AutoWire;
+using Microsoft.Extensions.Hosting;
+
+[HostedService]
+public class DataSyncWorker : BackgroundService
+{
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            await SyncDataAsync();
+            await Task.Delay(TimeSpan.FromMinutes(5), stoppingToken);
+        }
+    }
+}
+```
+
+```csharp
+// Program.cs — one call registers everything, including hosted services
+builder.Services.AddAutoWireServices();
+```
+
+AutoWire generates:
+
+```csharp
+services.AddHostedService<global::DataSyncWorker>();
+```
+
+`AddHostedService` uses `TryAddEnumerable` internally — calling `AddAutoWireServices()` multiple times is safe and idempotent.
+
+---
+
 ## Roslyn diagnostics
 
 AutoWire ships two built-in diagnostics that surface problems **as squiggles in the IDE** — no runtime surprises.
 
 | ID | Severity | Condition |
 |---|---|---|
-| AW001 | ⚠ Warning | `[Scoped]` / `[TryScoped]` etc. applied to an **abstract class** — the class will never be registered |
-| AW002 | ℹ Info | **Multiple non-keyed** `Add`-strategy registrations for the same service type — last wins, which may be unintentional |
+| AW001 | ⚠ Warning | `[Scoped]` / `[HostedService]` etc. applied to an **abstract class** — will never be registered |
+| AW002 | ℹ Info | **Multiple non-keyed** `Add`-strategy registrations for the same service type |
+| AW003 | ❌ Error | Explicit `ServiceType` in `[Scoped(typeof(IFoo))]` is **not implemented** by the decorated class |
 
 ### AW001 example
 
@@ -238,10 +277,21 @@ AutoWire ships two built-in diagnostics that surface problems **as squiggles in 
 public abstract class BaseHandler : IHandler { }
 ```
 
-### AW002 example
+### AW003 example
 
 ```csharp
-// ℹ AW002: Multiple non-keyed implementations are registered for 'IOrderService'.
+// ❌ AW003 Error: 'ReportService' does not implement 'IOrderService'.
+[Scoped(typeof(IOrderService))]
+public class ReportService : IReportService { }  // wrong type!
+
+// ✅ Fix:
+[Scoped(typeof(IReportService))]
+public class ReportService : IReportService { }
+```
+
+AW003 is an **Error** (not a warning) — the registration would always throw at runtime, so it blocks the build.
+
+
 [Scoped] public class OrderServiceV1 : IOrderService { }
 [Scoped] public class OrderServiceV2 : IOrderService { }
 
@@ -446,6 +496,12 @@ Works with ASP.NET Core, Worker Services, MAUI, Blazor, console apps — any pro
 ---
 
 ## FAQ
+
+**Q: Does it work with Worker Services and background jobs?**
+Yes — use `[HostedService]` on any class implementing `IHostedService` or extending `BackgroundService`. AutoWire generates `services.AddHostedService<T>()` and handles idempotency automatically.
+
+**Q: What if I accidentally specify the wrong service type?**
+AW003 catches it at compile time with a build error. `[Scoped(typeof(IFoo))]` on a class that doesn't implement `IFoo` will fail the build with a clear message rather than exploding at runtime.
 
 **Q: What if I have two services implementing the same interface?**
 AutoWire registers each independently and emits an AW002 info diagnostic. Use `DuplicateStrategy.Replace` to make the winner explicit, `DuplicateStrategy.Skip` to keep the first, or keyed services to disambiguate.
