@@ -245,6 +245,14 @@ Incremental source generators only re-run when a decorated class changes. The ov
 
 ---
 
+
+---
+
+## 💼 Need .NET consulting?
+
+I'm the author of AutoWire and a suite of 28+ Polly v8 resilience packages. I'm available for consulting on **Polly v8 resilience**, **Azure cloud architecture**, and **clean .NET design**.
+
+**[→ solidqualitysolutions.com](https://www.solidqualitysolutions.com/)**
 ## License
 
 MIT © Justin Bannister
