@@ -294,4 +294,26 @@ public class GeneratedCodeTests
         var count = provider.GetServices<IHostedService>().Count(w => w is TestBackgroundWorker);
         Assert.Equal(1, count);
     }
+
+    // ── IncludeSelf ───────────────────────────────────────────────────────────
+
+    [Fact]
+    public void IncludeSelf_RegistersAsBothInterfaceAndConcreteType()
+    {
+        using var provider = BuildProvider();
+        Assert.NotNull(provider.GetService<IAnalyticsService>());
+        Assert.NotNull(provider.GetService<AnalyticsService>());
+        Assert.IsType<AnalyticsService>(provider.GetService<IAnalyticsService>());
+        Assert.IsType<AnalyticsService>(provider.GetService<AnalyticsService>());
+    }
+
+    [Fact]
+    public void IncludeSelf_WithExplicitServiceType_RegistersAsBothExplicitAndConcrete()
+    {
+        using var provider = BuildProvider();
+        Assert.NotNull(provider.GetService<INotificationService>());
+        Assert.NotNull(provider.GetService<NotificationService>());
+        // IEmailSender was NOT in the explicit ServiceType — should not be registered
+        Assert.Null(provider.GetService<IEmailSender>());
+    }
 }
