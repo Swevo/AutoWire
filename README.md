@@ -295,13 +295,14 @@ services.AddHostedService<global::DataSyncWorker>();
 
 ## Roslyn diagnostics
 
-AutoWire ships two built-in diagnostics that surface problems **as squiggles in the IDE** — no runtime surprises.
+AutoWire ships four built-in diagnostics that surface problems **as squiggles in the IDE** — no runtime surprises.
 
 | ID | Severity | Condition |
 |---|---|---|
 | AW001 | ⚠ Warning | `[Scoped]` / `[HostedService]` etc. applied to an **abstract class** — will never be registered |
 | AW002 | ℹ Info | **Multiple non-keyed** `Add`-strategy registrations for the same service type |
 | AW003 | ❌ Error | Explicit `ServiceType` in `[Scoped(typeof(IFoo))]` is **not implemented** by the decorated class |
+| AW004 | ⚠ Warning | `[Singleton]` depends on a `[Scoped]` service — **captive dependency** that bypasses scope disposal |
 
 ### AW001 example
 
@@ -323,21 +324,36 @@ public class ReportService : IReportService { }  // wrong type!
 public class ReportService : IReportService { }
 ```
 
-AW003 is an **Error** (not a warning) — the registration would always throw at runtime, so it blocks the build.
+### AW004 example
 
+```csharp
+// ⚠ AW004: Singleton 'ReportingService' depends on Scoped service 'IOrderService'.
+// The scoped service will be captured for the singleton's lifetime, bypassing scope disposal.
+[Singleton]
+public class ReportingService
+{
+    public ReportingService(IOrderService orders) { _orders = orders; }  // ← captive!
+}
 
-[Scoped] public class OrderServiceV1 : IOrderService { }
-[Scoped] public class OrderServiceV2 : IOrderService { }
+// ✅ Fix — inject IServiceScopeFactory and create a scope explicitly:
+[Singleton]
+public class ReportingService
+{
+    private readonly IServiceScopeFactory _scopeFactory;
+    public ReportingService(IServiceScopeFactory scopeFactory) { _scopeFactory = scopeFactory; }
 
-// Suppress by being explicit:
-[Scoped] public class OrderServiceV1 : IOrderService { }
-[Scoped(Duplicate = DuplicateStrategy.Replace)] public class OrderServiceV2 : IOrderService { }
-// AW002 suppressed — intent is clear.
+    public void GenerateReport()
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var orders = scope.ServiceProvider.GetRequiredService<IOrderService>();
+        // ... use orders within the scope
+    }
+}
 ```
 
+AW004 covers both `[Singleton]` and `[TrySingleton]`, and detects scoped services registered via `[Scoped]` or `[TryScoped]`.
 
 
-## Open generic types
 
 AutoWire fully supports open generic registrations. The correct `typeof()` overload is generated automatically — no reflection needed.
 
@@ -530,6 +546,9 @@ Works with ASP.NET Core, Worker Services, MAUI, Blazor, console apps — any pro
 ---
 
 ## FAQ
+
+**Q: I'm getting AW004 — what is a captive dependency?**
+A captive dependency occurs when a Singleton holds a reference to a Scoped service. Since singletons live for the application's lifetime, the scoped service is never released when its scope ends. Fix it by injecting `IServiceScopeFactory` and creating a short-lived scope inside the method that needs the scoped service.
 
 **Q: Can I resolve a service by both its interface and its concrete type?**
 Yes — use `IncludeSelf = true`: `[Scoped(IncludeSelf = true)]`. AutoWire emits an extra `services.AddScoped<ConcreteType>()` in addition to the normal interface registrations. Useful for tests and the decorator pattern.
