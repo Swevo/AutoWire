@@ -93,6 +93,8 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                 public DuplicateStrategy Duplicate { get; set; } = DuplicateStrategy.Add;
                 /// <summary>Also registers the concrete type itself in addition to the interface(s). Useful when you need to inject by concrete type in tests or internal code.</summary>
                 public bool IncludeSelf { get; set; }
+                /// <summary>Only registers this service when <c>AddAutoWireServices(profile: "...")</c> is called with a matching profile. When null, the service is always registered.</summary>
+                public string? Profile { get; set; }
                 /// <summary>Registers against all non-system interfaces the class implements (or as concrete type if none).</summary>
                 public ScopedAttribute() { }
                 /// <summary>Registers against the specified service type only.</summary>
@@ -111,6 +113,8 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                 public DuplicateStrategy Duplicate { get; set; } = DuplicateStrategy.Add;
                 /// <summary>Also registers the concrete type itself in addition to the interface(s). Useful when you need to inject by concrete type in tests or internal code.</summary>
                 public bool IncludeSelf { get; set; }
+                /// <summary>Only registers this service when <c>AddAutoWireServices(profile: "...")</c> is called with a matching profile. When null, the service is always registered.</summary>
+                public string? Profile { get; set; }
                 /// <summary>Registers against all non-system interfaces the class implements (or as concrete type if none).</summary>
                 public SingletonAttribute() { }
                 /// <summary>Registers against the specified service type only.</summary>
@@ -129,6 +133,8 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                 public DuplicateStrategy Duplicate { get; set; } = DuplicateStrategy.Add;
                 /// <summary>Also registers the concrete type itself in addition to the interface(s). Useful when you need to inject by concrete type in tests or internal code.</summary>
                 public bool IncludeSelf { get; set; }
+                /// <summary>Only registers this service when <c>AddAutoWireServices(profile: "...")</c> is called with a matching profile. When null, the service is always registered.</summary>
+                public string? Profile { get; set; }
                 /// <summary>Registers against all non-system interfaces the class implements (or as concrete type if none).</summary>
                 public TransientAttribute() { }
                 /// <summary>Registers against the specified service type only.</summary>
@@ -149,6 +155,8 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                 public string? Key { get; set; }
                 /// <summary>Also registers the concrete type itself in addition to the interface(s). Useful when you need to inject by concrete type in tests or internal code.</summary>
                 public bool IncludeSelf { get; set; }
+                /// <summary>Only registers this service when <c>AddAutoWireServices(profile: "...")</c> is called with a matching profile. When null, the service is always registered.</summary>
+                public string? Profile { get; set; }
                 public TryScopedAttribute() { }
                 public TryScopedAttribute(Type serviceType) { ServiceType = serviceType; }
             }
@@ -167,6 +175,8 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                 public string? Key { get; set; }
                 /// <summary>Also registers the concrete type itself in addition to the interface(s). Useful when you need to inject by concrete type in tests or internal code.</summary>
                 public bool IncludeSelf { get; set; }
+                /// <summary>Only registers this service when <c>AddAutoWireServices(profile: "...")</c> is called with a matching profile. When null, the service is always registered.</summary>
+                public string? Profile { get; set; }
                 public TrySingletonAttribute() { }
                 public TrySingletonAttribute(Type serviceType) { ServiceType = serviceType; }
             }
@@ -185,6 +195,8 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                 public string? Key { get; set; }
                 /// <summary>Also registers the concrete type itself in addition to the interface(s). Useful when you need to inject by concrete type in tests or internal code.</summary>
                 public bool IncludeSelf { get; set; }
+                /// <summary>Only registers this service when <c>AddAutoWireServices(profile: "...")</c> is called with a matching profile. When null, the service is always registered.</summary>
+                public string? Profile { get; set; }
                 public TryTransientAttribute() { }
                 public TryTransientAttribute(Type serviceType) { ServiceType = serviceType; }
             }
@@ -543,7 +555,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
         // Only warn when multiple Add-strategy (non-Skip, non-Replace) registrations share a service type.
         // Skip and Replace explicitly acknowledge the duplicate — no noise.
         var seenServices = new HashSet<string>();
-        foreach (var reg in registrations.Where(r => r.Key is null && r.DuplicateStrategy == DuplicateStrategy.Add))
+        foreach (var reg in registrations.Where(r => r.Key is null && r.DuplicateStrategy == DuplicateStrategy.Add && r.Profile is null))
         {
             foreach (var svc in reg.ServiceTypes)
             {
@@ -647,6 +659,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
         string? key = null;
         var duplicateStrategy = defaultStrategy;
         var includeSelf = false;
+        string? profile = null;
 
         foreach (var namedArg in attr.NamedArguments)
         {
@@ -656,6 +669,8 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                 duplicateStrategy = (DuplicateStrategy)d;
             else if (namedArg.Key == "IncludeSelf" && namedArg.Value.Value is bool b)
                 includeSelf = b;
+            else if (namedArg.Key == "Profile" && namedArg.Value.Value is string p)
+                profile = p;
         }
 
         // ── Open generic path ─────────────────────────────────────────────────
@@ -685,7 +700,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                     serviceTypes.Add(implName);
             }
 
-            return new RegistrationInfo(implName, serviceTypes.ToImmutableArray(), lifetime, key, true, duplicateStrategy, includeSelf);
+            return new RegistrationInfo(implName, serviceTypes.ToImmutableArray(), lifetime, key, true, duplicateStrategy, includeSelf, profile);
         }
 
         // ── Closed type path ──────────────────────────────────────────────────
@@ -714,7 +729,8 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             key,
             false,
             duplicateStrategy,
-            includeSelf);
+            includeSelf,
+            profile);
     }
 
     // ── Code generation ────────────────────────────────────────────────────────
@@ -742,12 +758,17 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
         sb.AppendLine("    /// <see cref=\"TryScopedAttribute\"/>, <see cref=\"TrySingletonAttribute\"/>,");
         sb.AppendLine("    /// or <see cref=\"TryTransientAttribute\"/>.");
         sb.AppendLine("    /// </summary>");
+        sb.AppendLine("    /// <param name=\"services\">The service collection to populate.</param>");
+        sb.AppendLine("    /// <param name=\"profile\">When provided, also registers services whose <c>Profile</c> matches this value. Services with no profile are always registered.</param>");
         sb.AppendLine($"    public static global::Microsoft.Extensions.DependencyInjection.IServiceCollection {methodName}(");
-        sb.AppendLine("        this global::Microsoft.Extensions.DependencyInjection.IServiceCollection services)");
+        sb.AppendLine("        this global::Microsoft.Extensions.DependencyInjection.IServiceCollection services,");
+        sb.AppendLine("        string? profile = null)");
         sb.AppendLine("    {");
 
+        // ── No-profile registrations (always active) ──────────────────────────
         // Ordering: Add(0) first so Skip/Replace see them already registered, then Skip(1), then Replace(2).
         foreach (var reg in registrations
+            .Where(static r => r.Profile is null)
             .OrderBy(static r => (int)r.DuplicateStrategy)
             .ThenBy(static r => r.Lifetime)
             .ThenBy(static r => r.ImplementationType))
@@ -755,9 +776,36 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             foreach (var svc in reg.ServiceTypes)
                 EmitLine(sb, reg, svc);
 
-            // IncludeSelf: also register as concrete type when not already a self-only registration.
             if (reg.IncludeSelf && !reg.ServiceTypes.Contains(reg.ImplementationType))
                 EmitLine(sb, reg, reg.ImplementationType);
+        }
+
+        // ── Profile-conditional registrations ─────────────────────────────────
+        var profileGroups = new Dictionary<string, List<RegistrationInfo>>(StringComparer.Ordinal);
+        foreach (var reg in registrations.Where(static r => r.Profile is not null))
+        {
+            if (!profileGroups.TryGetValue(reg.Profile!, out var list))
+                profileGroups[reg.Profile!] = list = new List<RegistrationInfo>();
+            list.Add(reg);
+        }
+
+        foreach (var kvp in profileGroups.OrderBy(static g => g.Key))
+        {
+            sb.AppendLine();
+            sb.AppendLine($"        if (profile == \"{kvp.Key}\")");
+            sb.AppendLine("        {");
+            foreach (var reg in kvp.Value
+                .OrderBy(static r => (int)r.DuplicateStrategy)
+                .ThenBy(static r => r.Lifetime)
+                .ThenBy(static r => r.ImplementationType))
+            {
+                foreach (var svc in reg.ServiceTypes)
+                    EmitLine(sb, reg, svc, "            ");
+
+                if (reg.IncludeSelf && !reg.ServiceTypes.Contains(reg.ImplementationType))
+                    EmitLine(sb, reg, reg.ImplementationType, "            ");
+            }
+            sb.AppendLine("        }");
         }
 
         // ── Decorators (always after normal registrations so the inner service is present) ──
@@ -893,7 +941,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
         }
     }
 
-    private static void EmitLine(StringBuilder sb, RegistrationInfo reg, string svc)
+    private static void EmitLine(StringBuilder sb, RegistrationInfo reg, string svc, string indent = "        ")
     {
         var isSelf = svc == reg.ImplementationType;
 
@@ -903,21 +951,21 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                 // Remove all existing registrations for this service type, then add.
                 if (reg.IsOpenGeneric)
                 {
-                    sb.AppendLine($"        services.RemoveAll(typeof({svc}));");
+                    sb.AppendLine($"{indent}services.RemoveAll(typeof({svc}));");
                     sb.AppendLine(isSelf
-                        ? $"        services.Add{reg.Lifetime}(typeof({svc}));"
-                        : $"        services.Add{reg.Lifetime}(typeof({svc}), typeof({reg.ImplementationType}));");
+                        ? $"{indent}services.Add{reg.Lifetime}(typeof({svc}));"
+                        : $"{indent}services.Add{reg.Lifetime}(typeof({svc}), typeof({reg.ImplementationType}));");
                 }
                 else
                 {
-                    sb.AppendLine($"        services.RemoveAll<{svc}>();");
+                    sb.AppendLine($"{indent}services.RemoveAll<{svc}>();");
                     sb.AppendLine(reg.Key is not null
                         ? (isSelf
-                            ? $"        services.AddKeyed{reg.Lifetime}<{svc}>(\"{reg.Key}\");"
-                            : $"        services.AddKeyed{reg.Lifetime}<{svc}, {reg.ImplementationType}>(\"{reg.Key}\");")
+                            ? $"{indent}services.AddKeyed{reg.Lifetime}<{svc}>(\"{reg.Key}\");"
+                            : $"{indent}services.AddKeyed{reg.Lifetime}<{svc}, {reg.ImplementationType}>(\"{reg.Key}\");")
                         : (isSelf
-                            ? $"        services.Add{reg.Lifetime}<{svc}>();"
-                            : $"        services.Add{reg.Lifetime}<{svc}, {reg.ImplementationType}>();"));
+                            ? $"{indent}services.Add{reg.Lifetime}<{svc}>();"
+                            : $"{indent}services.Add{reg.Lifetime}<{svc}, {reg.ImplementationType}>();"));
                 }
                 break;
 
@@ -927,21 +975,21 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                 {
                     sb.AppendLine(reg.Key is not null
                         ? (isSelf
-                            ? $"        services.TryAddKeyed{reg.Lifetime}(typeof({svc}), \"{reg.Key}\");"
-                            : $"        services.TryAddKeyed{reg.Lifetime}(typeof({svc}), \"{reg.Key}\", typeof({reg.ImplementationType}));")
+                            ? $"{indent}services.TryAddKeyed{reg.Lifetime}(typeof({svc}), \"{reg.Key}\");"
+                            : $"{indent}services.TryAddKeyed{reg.Lifetime}(typeof({svc}), \"{reg.Key}\", typeof({reg.ImplementationType}));")
                         : (isSelf
-                            ? $"        services.TryAdd{reg.Lifetime}(typeof({svc}));"
-                            : $"        services.TryAdd{reg.Lifetime}(typeof({svc}), typeof({reg.ImplementationType}));"));
+                            ? $"{indent}services.TryAdd{reg.Lifetime}(typeof({svc}));"
+                            : $"{indent}services.TryAdd{reg.Lifetime}(typeof({svc}), typeof({reg.ImplementationType}));"));
                 }
                 else
                 {
                     sb.AppendLine(reg.Key is not null
                         ? (isSelf
-                            ? $"        services.TryAddKeyed{reg.Lifetime}<{svc}>(\"{reg.Key}\");"
-                            : $"        services.TryAddKeyed{reg.Lifetime}<{svc}, {reg.ImplementationType}>(\"{reg.Key}\");")
+                            ? $"{indent}services.TryAddKeyed{reg.Lifetime}<{svc}>(\"{reg.Key}\");"
+                            : $"{indent}services.TryAddKeyed{reg.Lifetime}<{svc}, {reg.ImplementationType}>(\"{reg.Key}\");")
                         : (isSelf
-                            ? $"        services.TryAdd{reg.Lifetime}<{svc}>();"
-                            : $"        services.TryAdd{reg.Lifetime}<{svc}, {reg.ImplementationType}>();"));
+                            ? $"{indent}services.TryAdd{reg.Lifetime}<{svc}>();"
+                            : $"{indent}services.TryAdd{reg.Lifetime}<{svc}, {reg.ImplementationType}>();"));
                 }
                 break;
 
@@ -950,23 +998,23 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                 {
                     sb.AppendLine(reg.Key is not null
                         ? (isSelf
-                            ? $"        services.AddKeyed{reg.Lifetime}(typeof({svc}), \"{reg.Key}\");"
-                            : $"        services.AddKeyed{reg.Lifetime}(typeof({svc}), \"{reg.Key}\", typeof({reg.ImplementationType}));")
+                            ? $"{indent}services.AddKeyed{reg.Lifetime}(typeof({svc}), \"{reg.Key}\");"
+                            : $"{indent}services.AddKeyed{reg.Lifetime}(typeof({svc}), \"{reg.Key}\", typeof({reg.ImplementationType}));")
                         : (isSelf
-                            ? $"        services.Add{reg.Lifetime}(typeof({svc}));"
-                            : $"        services.Add{reg.Lifetime}(typeof({svc}), typeof({reg.ImplementationType}));"));
+                            ? $"{indent}services.Add{reg.Lifetime}(typeof({svc}));"
+                            : $"{indent}services.Add{reg.Lifetime}(typeof({svc}), typeof({reg.ImplementationType}));"));
                 }
                 else if (reg.Key is not null)
                 {
                     sb.AppendLine(isSelf
-                        ? $"        services.AddKeyed{reg.Lifetime}<{svc}>(\"{reg.Key}\");"
-                        : $"        services.AddKeyed{reg.Lifetime}<{svc}, {reg.ImplementationType}>(\"{reg.Key}\");");
+                        ? $"{indent}services.AddKeyed{reg.Lifetime}<{svc}>(\"{reg.Key}\");"
+                        : $"{indent}services.AddKeyed{reg.Lifetime}<{svc}, {reg.ImplementationType}>(\"{reg.Key}\");");
                 }
                 else
                 {
                     sb.AppendLine(isSelf
-                        ? $"        services.Add{reg.Lifetime}<{svc}>();"
-                        : $"        services.Add{reg.Lifetime}<{svc}, {reg.ImplementationType}>();");
+                        ? $"{indent}services.Add{reg.Lifetime}<{svc}>();"
+                        : $"{indent}services.Add{reg.Lifetime}<{svc}, {reg.ImplementationType}>();");
                 }
                 break;
         }

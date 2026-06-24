@@ -12,6 +12,7 @@ internal sealed class RegistrationInfo
     public bool IsOpenGeneric { get; }
     public DuplicateStrategy DuplicateStrategy { get; }
     public bool IncludeSelf { get; }
+    public string? Profile { get; }
 
     public RegistrationInfo(
         string implementationType,
@@ -20,7 +21,8 @@ internal sealed class RegistrationInfo
         string? key,
         bool isOpenGeneric = false,
         DuplicateStrategy duplicateStrategy = DuplicateStrategy.Add,
-        bool includeSelf = false)
+        bool includeSelf = false,
+        string? profile = null)
     {
         ImplementationType = implementationType;
         ServiceTypes = serviceTypes;
@@ -29,6 +31,7 @@ internal sealed class RegistrationInfo
         IsOpenGeneric = isOpenGeneric;
         DuplicateStrategy = duplicateStrategy;
         IncludeSelf = includeSelf;
+        Profile = profile;
     }
 
     public override bool Equals(object? obj) =>
@@ -39,7 +42,8 @@ internal sealed class RegistrationInfo
         Key == other.Key &&
         IsOpenGeneric == other.IsOpenGeneric &&
         DuplicateStrategy == other.DuplicateStrategy &&
-        IncludeSelf == other.IncludeSelf;
+        IncludeSelf == other.IncludeSelf &&
+        Profile == other.Profile;
 
     public override int GetHashCode()
     {
@@ -51,6 +55,7 @@ internal sealed class RegistrationInfo
             h = h * 397 ^ IsOpenGeneric.GetHashCode();
             h = h * 397 ^ DuplicateStrategy.GetHashCode();
             h = h * 397 ^ IncludeSelf.GetHashCode();
+            h = h * 397 ^ (Profile?.GetHashCode() ?? 0);
             foreach (var s in ServiceTypes)
                 h = h * 397 ^ s.GetHashCode();
             return h;
