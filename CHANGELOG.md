@@ -7,7 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [1.16.0] — 2026-06-26
+## [1.17.0] — 2026-06-25
+
+### Added
+- **AW010 diagnostic** — warns when two or more `[Interceptor]` attributes on the same class target the same interface.
+  Only the first will be registered; the duplicate is silently dropped, which is almost never intentional.
+- **Code fix for AW009** — "Replace Scoped dependency with IServiceScopeFactory".
+  When AW009 fires, a Roslyn quick-fix rewrites the constructor to accept `IServiceScopeFactory`, stores it in a private field, and removes the problematic scoped parameter.
+- **`Timeout` property** on `[HttpClient]` — sets `HttpClient.Timeout` via `TimeSpan.FromSeconds(n)`.
+- **`DefaultHeaders` property** on `[HttpClient]` — accepts `string[]` entries in `"Key:Value"` format; emits `c.DefaultRequestHeaders.Add(...)` calls inside the configure lambda.
+
+---
+
+
 
 ### Added
 - **AW009 diagnostic** — warns when a `[HostedService]`-decorated class injects a Scoped service directly.

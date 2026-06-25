@@ -341,6 +341,39 @@ public class DiagnosticTests
         Assert.Contains("AddTypedClient<global::GitHubClient>()", code);
     }
 
+    [Fact]
+    public void HttpClient_Timeout_EmitsTimeoutAssignment()
+    {
+        var source = """
+            [AutoWire.HttpClient(Timeout = 30)]
+            public class SlowApiClient
+            {
+                public SlowApiClient(System.Net.Http.HttpClient http) { }
+            }
+            """;
+
+        var (_, sources) = RunGeneratorWithSources(source);
+        var code = sources.First(s => s.HintName.Contains("ServiceCollectionExtensions")).SourceText.ToString();
+        Assert.Contains("TimeSpan.FromSeconds(30)", code);
+    }
+
+    [Fact]
+    public void HttpClient_DefaultHeaders_EmitsDefaultRequestHeadersAdd()
+    {
+        var source = """
+            [AutoWire.HttpClient(DefaultHeaders = new[] { "Accept:application/json", "X-App-Id:myapp" })]
+            public class JsonApiClient
+            {
+                public JsonApiClient(System.Net.Http.HttpClient http) { }
+            }
+            """;
+
+        var (_, sources) = RunGeneratorWithSources(source);
+        var code = sources.First(s => s.HintName.Contains("ServiceCollectionExtensions")).SourceText.ToString();
+        Assert.Contains("DefaultRequestHeaders.Add(\"Accept\", \"application/json\")", code);
+        Assert.Contains("DefaultRequestHeaders.Add(\"X-App-Id\", \"myapp\")", code);
+    }
+
     // ── AW008: dangerous singleton dependency ─────────────────────────────────
 
     [Fact]
@@ -547,6 +580,43 @@ public class DiagnosticTests
         var code = sources.First(s => s.HintName.Contains("ServiceCollectionExtensions")).SourceText.ToString();
         Assert.Contains(": global::ICounter", code);
         Assert.Contains("Increment()", code);
+    }
+
+    // ── AW010: duplicate interceptor target ───────────────────────────────────
+
+    [Fact]
+    public void AW010_TwoInterceptorAttributesOnSameClassSameInterface_EmitsWarning()
+    {
+        var source = """
+            public interface IMyService { }
+            [AutoWire.Interceptor(typeof(IMyService))]
+            [AutoWire.Interceptor(typeof(IMyService))]
+            public class DuplicateInterceptor : AutoWire.IAutoWireInterceptor
+            {
+                public void Intercept(AutoWire.IAutoWireInvocation invocation) { }
+            }
+            """;
+
+        var diagnostics = RunGenerator(source);
+        Assert.Contains(diagnostics, d => d.Id == "AW010");
+    }
+
+    [Fact]
+    public void AW010_TwoInterceptorAttributesDifferentInterfaces_NoWarning()
+    {
+        var source = """
+            public interface IServiceA { }
+            public interface IServiceB { }
+            [AutoWire.Interceptor(typeof(IServiceA))]
+            [AutoWire.Interceptor(typeof(IServiceB))]
+            public class MultiInterceptor : AutoWire.IAutoWireInterceptor
+            {
+                public void Intercept(AutoWire.IAutoWireInvocation invocation) { }
+            }
+            """;
+
+        var diagnostics = RunGenerator(source);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "AW010");
     }
 
     private static IReadOnlyList<Diagnostic> RunGenerator(string source)

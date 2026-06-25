@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+
 namespace AutoWire;
 
 internal sealed class HttpClientInfo
@@ -6,13 +8,23 @@ internal sealed class HttpClientInfo
     public string? Name { get; }
     public string? BaseAddress { get; }
     public bool Resilience { get; }
+    public int? TimeoutSeconds { get; }
+    public ImmutableArray<string> DefaultHeaders { get; }
 
-    public HttpClientInfo(string implementationType, string? name, string? baseAddress, bool resilience = false)
+    public HttpClientInfo(
+        string implementationType,
+        string? name,
+        string? baseAddress,
+        bool resilience = false,
+        int? timeoutSeconds = null,
+        ImmutableArray<string> defaultHeaders = default)
     {
         ImplementationType = implementationType;
         Name = name;
         BaseAddress = baseAddress;
         Resilience = resilience;
+        TimeoutSeconds = timeoutSeconds;
+        DefaultHeaders = defaultHeaders.IsDefault ? ImmutableArray<string>.Empty : defaultHeaders;
     }
 
     public override bool Equals(object? obj) =>
@@ -20,7 +32,8 @@ internal sealed class HttpClientInfo
         ImplementationType == other.ImplementationType &&
         Name == other.Name &&
         BaseAddress == other.BaseAddress &&
-        Resilience == other.Resilience;
+        Resilience == other.Resilience &&
+        TimeoutSeconds == other.TimeoutSeconds;
 
     public override int GetHashCode()
     {
@@ -30,6 +43,7 @@ internal sealed class HttpClientInfo
             h = h * 397 ^ (Name?.GetHashCode() ?? 0);
             h = h * 397 ^ (BaseAddress?.GetHashCode() ?? 0);
             h = h * 397 ^ Resilience.GetHashCode();
+            h = h * 397 ^ (TimeoutSeconds?.GetHashCode() ?? 0);
             return h;
         }
     }
