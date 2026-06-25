@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.19.0] — 2026-06-25
+
+### Added
+- **Code fix for AW002** — offers "Add Duplicate = DuplicateStrategy.Replace" (this registration wins)
+  or "Add Duplicate = DuplicateStrategy.Skip" (keep existing) directly from the lightbulb.
+- **Code fix for AW004** — "Change to [Scoped]" / "Change to [TryScoped]" when a Singleton has a
+  captive Scoped dependency. Fixes the captive dependency in one click.
+- **Code fix for AW008** — "Change to [Scoped]" / "Change to [TryScoped]" when a Singleton injects
+  `IHttpContextAccessor` or a `DbContext`-derived type.
+- **Code fix for AW011** — "Remove [Interceptor]" when the target interface has no interceptable
+  methods (the proxy class would be empty).
+
+---
+
 ## [1.18.0] — 2026-06-25
 
 ### Added
