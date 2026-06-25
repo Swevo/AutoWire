@@ -294,3 +294,27 @@ public class GitHubApiClient
     public GitHubApiClient(HttpClient http) { Http = http; }
     public HttpClient Http { get; }
 }
+
+[HttpClient(Resilience = true)]
+public class ResilientApiClient
+{
+    public ResilientApiClient(HttpClient http) { Http = http; }
+    public HttpClient Http { get; }
+}
+
+// ── [AutoWireModule]: grouped registration in separate extension methods ──────
+
+public interface IPaymentService { string Pay(decimal amount); }
+public interface INotificationChannel { void Notify(string msg); }
+
+[Scoped(Module = "Payments")]
+public class BankTransferService : IPaymentService
+{
+    public string Pay(decimal amount) => $"bank:{amount}";
+}
+
+[Singleton(Module = "Notifications")]
+public class SmsChannel : INotificationChannel
+{
+    public void Notify(string msg) => throw new NotImplementedException();
+}

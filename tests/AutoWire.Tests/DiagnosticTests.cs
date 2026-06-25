@@ -341,6 +341,113 @@ public class DiagnosticTests
         Assert.Contains("AddTypedClient<global::GitHubClient>()", code);
     }
 
+    // ── AW008: dangerous singleton dependency ─────────────────────────────────
+
+    [Fact]
+    public void AW008_SingletonInjectingIHttpContextAccessor_EmitsWarning()
+    {
+        var source = """
+            namespace Microsoft.AspNetCore.Http { public interface IHttpContextAccessor { } }
+            [AutoWire.Singleton]
+            public class MySingleton
+            {
+                public MySingleton(Microsoft.AspNetCore.Http.IHttpContextAccessor accessor) { }
+            }
+            """;
+
+        var diagnostics = RunGenerator(source);
+        Assert.Contains(diagnostics, d => d.Id == "AW008");
+    }
+
+    [Fact]
+    public void AW008_SingletonInjectingNormalDep_NoWarning()
+    {
+        var source = """
+            public interface INormalDep { }
+            [AutoWire.Singleton]
+            public class MySingleton
+            {
+                public MySingleton(INormalDep dep) { }
+            }
+            """;
+
+        var diagnostics = RunGenerator(source);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "AW008");
+    }
+
+    // ── [AutoWireModule] generated code ───────────────────────────────────────
+
+    [Fact]
+    public void Module_ServiceExcludedFromMainMethod()
+    {
+        var source = """
+            public interface IPaymentService { }
+            [AutoWire.Scoped(Module = "Payments")]
+            public class BankTransferService : IPaymentService { }
+            """;
+
+        var (_, sources) = RunGeneratorWithSources(source);
+        var code = sources.First(s => s.HintName.Contains("ServiceCollectionExtensions")).SourceText.ToString();
+        // Module service should NOT be in the main AddAutoWireServices method body
+        // but SHOULD appear in AddPaymentsModule
+        Assert.Contains("AddPaymentsModule", code);
+        Assert.Contains("global::IPaymentService, global::BankTransferService", code);
+    }
+
+    [Fact]
+    public void Module_GeneratesSeparateExtensionMethod()
+    {
+        var source = """
+            public interface IPaymentService { }
+            [AutoWire.Scoped(Module = "Payments")]
+            public class BankTransferService : IPaymentService { }
+            """;
+
+        var (_, sources) = RunGeneratorWithSources(source);
+        var code = sources.First(s => s.HintName.Contains("ServiceCollectionExtensions")).SourceText.ToString();
+        Assert.Contains("public static global::Microsoft.Extensions.DependencyInjection.IServiceCollection AddPaymentsModule", code);
+    }
+
+    // ── Resilience on [HttpClient] ─────────────────────────────────────────────
+
+    [Fact]
+    public void HttpClient_Resilience_EmitsAddStandardResilienceHandler()
+    {
+        var source = """
+            [AutoWire.HttpClient(Resilience = true)]
+            public class ResilientClient
+            {
+                public ResilientClient(System.Net.Http.HttpClient http) { }
+            }
+            """;
+
+        var (_, sources) = RunGeneratorWithSources(source);
+        var code = sources.First(s => s.HintName.Contains("ServiceCollectionExtensions")).SourceText.ToString();
+        Assert.Contains("AddStandardResilienceHandler()", code);
+    }
+
+    // ── Registration summary ───────────────────────────────────────────────────
+
+    [Fact]
+    public void Summary_GeneratesSummaryFile()
+    {
+        var source = """
+            public interface IMyService { }
+            [AutoWire.Scoped]
+            public class MyService : IMyService { }
+            [AutoWire.Singleton]
+            public class MySingleton : IMyService { }
+            """;
+
+        var (_, sources) = RunGeneratorWithSources(source);
+        Assert.Contains(sources, s => s.HintName.Contains("RegistrationSummary"));
+        var summary = sources.First(s => s.HintName.Contains("RegistrationSummary")).SourceText.ToString();
+        Assert.Contains("TotalCount = 2", summary);
+        Assert.Contains("ScopedCount = 1", summary);
+        Assert.Contains("SingletonCount = 1", summary);
+        Assert.Contains("class RegistrationSummary", summary);
+    }
+
     private static IReadOnlyList<Diagnostic> RunGenerator(string source)
     {
         var (diagnostics, _) = RunGeneratorWithSources(source);
