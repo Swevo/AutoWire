@@ -619,6 +619,90 @@ public class DiagnosticTests
         Assert.DoesNotContain(diagnostics, d => d.Id == "AW010");
     }
 
+    // ── AW011: empty interceptor interface ────────────────────────────────────
+
+    [Fact]
+    public void AW011_InterceptorTargetWithNoMethods_EmitsWarning()
+    {
+        var source = """
+            public interface IEmptyService { }
+            [AutoWire.Interceptor(typeof(IEmptyService))]
+            public class EmptyInterceptor : AutoWire.IAutoWireInterceptor
+            {
+                public void Intercept(AutoWire.IAutoWireInvocation invocation) { }
+            }
+            """;
+
+        var diagnostics = RunGenerator(source);
+        Assert.Contains(diagnostics, d => d.Id == "AW011");
+    }
+
+    [Fact]
+    public void AW011_InterceptorTargetWithMethods_NoWarning()
+    {
+        var source = """
+            public interface IMyService { void DoWork(); }
+            [AutoWire.Interceptor(typeof(IMyService))]
+            public class MyInterceptor : AutoWire.IAutoWireInterceptor
+            {
+                public void Intercept(AutoWire.IAutoWireInvocation invocation) { }
+            }
+            """;
+
+        var diagnostics = RunGenerator(source);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "AW011");
+    }
+
+    // ── Multi-interface attribute ─────────────────────────────────────────────
+
+    [Fact]
+    public void MultiInterface_ScopedWithTwoTypes_EmitsBothRegistrations()
+    {
+        var source = """
+            public interface IReader { }
+            public interface IWriter { }
+            [AutoWire.Scoped(typeof(IReader), typeof(IWriter))]
+            public class ReadWriteService : IReader, IWriter { }
+            """;
+
+        var (_, sources) = RunGeneratorWithSources(source);
+        var code = sources.First(s => s.HintName.Contains("ServiceCollectionExtensions")).SourceText.ToString();
+        Assert.Contains("AddScoped<global::IReader, global::ReadWriteService>()", code);
+        Assert.Contains("AddScoped<global::IWriter, global::ReadWriteService>()", code);
+    }
+
+    [Fact]
+    public void MultiInterface_AW003_RaisedForUnimplementedTypeInMultiCtor()
+    {
+        var source = """
+            public interface IReader { }
+            public interface IWriter { }
+            public interface INotImplemented { }
+            [AutoWire.Scoped(typeof(IReader), typeof(INotImplemented))]
+            public class ReadService : IReader { }
+            """;
+
+        var diagnostics = RunGenerator(source);
+        Assert.Contains(diagnostics, d => d.Id == "AW003");
+    }
+
+    // ── [HttpClient] UseFactory ───────────────────────────────────────────────
+
+    [Fact]
+    public void HttpClient_UseFactory_EmitsIHttpClientFactoryRegistration()
+    {
+        var source = """
+            [AutoWire.HttpClient(Name = "MyClient", UseFactory = true)]
+            public class MyService { }
+            """;
+
+        var (_, sources) = RunGeneratorWithSources(source);
+        var code = sources.First(s => s.HintName.Contains("ServiceCollectionExtensions")).SourceText.ToString();
+        Assert.Contains("AddHttpClient(\"MyClient\")", code);
+        Assert.Contains("IHttpClientFactory", code);
+        Assert.Contains("CreateClient(\"MyClient\")", code);
+    }
+
     private static IReadOnlyList<Diagnostic> RunGenerator(string source)
     {
         var (diagnostics, _) = RunGeneratorWithSources(source);

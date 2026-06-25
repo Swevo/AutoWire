@@ -7,7 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [1.17.0] — 2026-06-25
+## [1.18.0] — 2026-06-25
+
+### Added
+- **Multi-interface attributes** — register a service against multiple explicit interfaces in a single attribute:
+  ```csharp
+  [Scoped(typeof(IOrderReader), typeof(IOrderWriter))]
+  public class OrderService : IOrderReader, IOrderWriter { }
+  // → services.AddScoped<IOrderReader, OrderService>();
+  // → services.AddScoped<IOrderWriter, OrderService>();
+  ```
+  Works on all six registration attributes (`[Scoped]`, `[Singleton]`, `[Transient]`, and their `Try*` variants).
+  AW003 validates all types in the list — any unimplemented interface is still a build error.
+- **AW011 diagnostic** — warns when `[Interceptor(typeof(IFoo))]` is applied and `IFoo` has no non-generic, non-ref/out instance methods. The generated proxy class would be empty and the interception has no effect. Catches accidental `typeof(ConcreteClass)` vs `typeof(IInterface)` typos.
+- **`UseFactory` property on `[HttpClient]`** — when `UseFactory = true`, registers the named client via `IHttpClientFactory` instead of a typed client:
+  ```csharp
+  [HttpClient(Name = "GitHub", UseFactory = true)]
+  public class GitHubService { ... }
+  // → services.AddHttpClient("GitHub");
+  // → services.AddScoped(sp => sp.GetRequiredService<IHttpClientFactory>().CreateClient("GitHub"));
+  ```
+  Useful when multiple typed consumers share the same named client configuration.
+
+---
+
+
 
 ### Added
 - **AW010 diagnostic** — warns when two or more `[Interceptor]` attributes on the same class target the same interface.
