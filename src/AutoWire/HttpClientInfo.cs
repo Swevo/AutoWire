@@ -10,6 +10,7 @@ internal sealed class HttpClientInfo
     public bool Resilience { get; }
     public int? TimeoutSeconds { get; }
     public ImmutableArray<string> DefaultHeaders { get; }
+    public bool UseFactory { get; }
 
     public HttpClientInfo(
         string implementationType,
@@ -17,7 +18,8 @@ internal sealed class HttpClientInfo
         string? baseAddress,
         bool resilience = false,
         int? timeoutSeconds = null,
-        ImmutableArray<string> defaultHeaders = default)
+        ImmutableArray<string> defaultHeaders = default,
+        bool useFactory = false)
     {
         ImplementationType = implementationType;
         Name = name;
@@ -25,6 +27,7 @@ internal sealed class HttpClientInfo
         Resilience = resilience;
         TimeoutSeconds = timeoutSeconds;
         DefaultHeaders = defaultHeaders.IsDefault ? ImmutableArray<string>.Empty : defaultHeaders;
+        UseFactory = useFactory;
     }
 
     public override bool Equals(object? obj) =>
