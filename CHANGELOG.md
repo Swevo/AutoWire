@@ -7,7 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [1.19.0] — 2026-06-25
+## [1.20.0] — 2026-06-25
+
+### Added
+- **Code fix for AW010** — "Remove duplicate [Interceptor]": removes the duplicate `[Interceptor]` attribute when two attributes on the same class target the same interface.
+
+---
+
+
 
 ### Added
 - **Code fix for AW002** — offers "Add Duplicate = DuplicateStrategy.Replace" (this registration wins)
