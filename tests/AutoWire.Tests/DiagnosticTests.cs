@@ -1,5 +1,6 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.Text;
 
 /// <summary>
 /// Generator-driver tests that verify AW00x diagnostics are emitted correctly.
@@ -99,9 +100,177 @@ public class DiagnosticTests
         Assert.DoesNotContain(diagnostics, d => d.Id == "AW004");
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
+    // ── AW006: transient IDisposable ──────────────────────────────────────────
+
+    [Fact]
+    public void AW006_TransientImplementingIDisposable_EmitsWarning()
+    {
+        var source = """
+            public interface IMyService { }
+            [AutoWire.Transient]
+            public class MyDisposableService : IMyService, System.IDisposable
+            {
+                public void Dispose() { }
+            }
+            """;
+
+        var diagnostics = RunGenerator(source);
+        Assert.Contains(diagnostics, d => d.Id == "AW006");
+    }
+
+    [Fact]
+    public void AW006_TransientImplementingIAsyncDisposable_EmitsWarning()
+    {
+        var source = """
+            public interface IMyService { }
+            [AutoWire.Transient]
+            public class MyAsyncDisposableService : IMyService, System.IAsyncDisposable
+            {
+                public System.Threading.Tasks.ValueTask DisposeAsync() => default;
+            }
+            """;
+
+        var diagnostics = RunGenerator(source);
+        Assert.Contains(diagnostics, d => d.Id == "AW006");
+    }
+
+    [Fact]
+    public void AW006_TryTransientImplementingIDisposable_EmitsWarning()
+    {
+        var source = """
+            [AutoWire.TryTransient]
+            public class MyTryDisposable : System.IDisposable
+            {
+                public void Dispose() { }
+            }
+            """;
+
+        var diagnostics = RunGenerator(source);
+        Assert.Contains(diagnostics, d => d.Id == "AW006");
+    }
+
+    [Fact]
+    public void AW006_ScopedImplementingIDisposable_NoWarning()
+    {
+        var source = """
+            [AutoWire.Scoped]
+            public class MyScopedDisposable : System.IDisposable
+            {
+                public void Dispose() { }
+            }
+            """;
+
+        var diagnostics = RunGenerator(source);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "AW006");
+    }
+
+    [Fact]
+    public void AW006_SingletonImplementingIDisposable_NoWarning()
+    {
+        var source = """
+            [AutoWire.Singleton]
+            public class MySingletonDisposable : System.IDisposable
+            {
+                public void Dispose() { }
+            }
+            """;
+
+        var diagnostics = RunGenerator(source);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "AW006");
+    }
+
+    [Fact]
+    public void AW006_TransientNotDisposable_NoWarning()
+    {
+        var source = """
+            public interface IFoo { }
+            [AutoWire.Transient]
+            public class FooService : IFoo { }
+            """;
+
+        var diagnostics = RunGenerator(source);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "AW006");
+    }
+
+    // ── [Options] generated code verification ─────────────────────────────────
+
+    [Fact]
+    public void Options_WithExplicitSection_EmitsBindConfigurationCall()
+    {
+        var source = """
+            [AutoWire.Options("Database")]
+            public class DatabaseOptions { public string Host { get; set; } = ""; }
+            """;
+
+        var (_, generatedSources) = RunGeneratorWithSources(source);
+        Assert.True(generatedSources.Any(s => s.HintName.Contains("ServiceCollectionExtensions")));
+        var generated = generatedSources.First(s => s.HintName.Contains("ServiceCollectionExtensions"));
+        var code = generated.SourceText.ToString();
+        Assert.Contains("AddOptions<global::DatabaseOptions>()", code);
+        Assert.Contains(".BindConfiguration(\"Database\")", code);
+        Assert.Contains(".ValidateDataAnnotations()", code);
+        Assert.Contains(".ValidateOnStart()", code);
+    }
+
+    [Fact]
+    public void Options_WithNoSection_DerivesSectionFromClassName()
+    {
+        var source = """
+            [AutoWire.Options]
+            public class EmailOptions { }
+            """;
+
+        var (_, generatedSources) = RunGeneratorWithSources(source);
+        Assert.True(generatedSources.Any(s => s.HintName.Contains("ServiceCollectionExtensions")));
+        var generated = generatedSources.First(s => s.HintName.Contains("ServiceCollectionExtensions"));
+        var code = generated.SourceText.ToString();
+        // "EmailOptions" → section = "Email"
+        Assert.Contains(".BindConfiguration(\"Email\")", code);
+    }
+
+    [Fact]
+    public void Options_WithValidateFalse_OmitsValidateCalls()
+    {
+        var source = """
+            [AutoWire.Options("Minimal", ValidateDataAnnotations = false, ValidateOnStart = false)]
+            public class MinimalOptions { }
+            """;
+
+        var (_, generatedSources) = RunGeneratorWithSources(source);
+        Assert.True(generatedSources.Any(s => s.HintName.Contains("ServiceCollectionExtensions")));
+        var generated = generatedSources.First(s => s.HintName.Contains("ServiceCollectionExtensions"));
+        var code = generated.SourceText.ToString();
+        Assert.Contains(".BindConfiguration(\"Minimal\")", code);
+        Assert.DoesNotContain(".ValidateDataAnnotations()", code);
+        Assert.DoesNotContain(".ValidateOnStart()", code);
+    }
+
+    [Fact]
+    public void EnumKey_GeneratesFullyQualifiedEnumMember()
+    {
+        var source = """
+            public enum ServiceKey { Primary = 1, Secondary = 2 }
+            public interface IMyService { }
+            [AutoWire.Scoped(Key = ServiceKey.Primary)]
+            public class PrimaryService : IMyService { }
+            """;
+
+        var (_, generatedSources) = RunGeneratorWithSources(source);
+        Assert.True(generatedSources.Any(s => s.HintName.Contains("ServiceCollectionExtensions")));
+        var generated = generatedSources.First(s => s.HintName.Contains("ServiceCollectionExtensions"));
+        var code = generated.SourceText.ToString();
+        Assert.Contains("global::ServiceKey.Primary", code);
+        // Should NOT have a quoted string key
+        Assert.DoesNotContain("\"Primary\"", code);
+    }
 
     private static IReadOnlyList<Diagnostic> RunGenerator(string source)
+    {
+        var (diagnostics, _) = RunGeneratorWithSources(source);
+        return diagnostics;
+    }
+
+    private static (IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyList<GeneratedSourceResult> Sources) RunGeneratorWithSources(string source)
     {
         var references = ((string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES"))
             ?.Split(Path.PathSeparator)
@@ -120,6 +289,8 @@ public class DiagnosticTests
             .Create(generator)
             .RunGenerators(compilation);
 
-        return driver.GetRunResult().Diagnostics;
+        var result = driver.GetRunResult();
+        var sources = result.Results.SelectMany(r => r.GeneratedSources).ToList();
+        return (result.Diagnostics, sources);
     }
 }

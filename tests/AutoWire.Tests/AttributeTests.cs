@@ -16,10 +16,17 @@ public class AttributeTests
     }
 
     [Fact]
-    public void ScopedAttribute_KeyProperty_IsSettable()
+    public void ScopedAttribute_KeyProperty_AcceptsString()
     {
         var attr = new ScopedAttribute { Key = "myKey" };
         Assert.Equal("myKey", attr.Key);
+    }
+
+    [Fact]
+    public void ScopedAttribute_KeyProperty_AcceptsEnum()
+    {
+        var attr = new ScopedAttribute { Key = PaymentProvider.Stripe };
+        Assert.Equal(PaymentProvider.Stripe, attr.Key);
     }
 
     [Fact]
@@ -50,5 +57,21 @@ public class AttributeTests
     {
         var attr = new TransientAttribute(typeof(EmailSender));
         Assert.Equal(typeof(EmailSender), attr.ServiceType);
+    }
+
+    [Fact]
+    public void OptionsAttribute_DefaultConstructor_DerivesSectionFromClassName()
+    {
+        var attr = new OptionsAttribute();
+        Assert.Null(attr.Section); // null means "derive from class name"
+        Assert.True(attr.ValidateDataAnnotations);
+        Assert.True(attr.ValidateOnStart);
+    }
+
+    [Fact]
+    public void OptionsAttribute_WithSection_SetsProperty()
+    {
+        var attr = new OptionsAttribute("MySection");
+        Assert.Equal("MySection", attr.Section);
     }
 }
