@@ -28,6 +28,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
     private const string AutoWireExcludeFqn   = "AutoWire.AutoWireExcludeAttribute";
     private const string FactoryFqn           = "AutoWire.FactoryAttribute";
     private const string OptionsBindingFqn    = "AutoWire.OptionsAttribute";
+    private const string HttpClientFqn        = "AutoWire.HttpClientAttribute";
 
     // ── Diagnostics ────────────────────────────────────────────────────────────
     private static readonly DiagnosticDescriptor AW001AbstractClass = new(
@@ -83,6 +84,15 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
         defaultSeverity: DiagnosticSeverity.Warning,
         isEnabledByDefault: true,
         description: "Change the lifetime to Scoped so the container disposes the service when the scope ends, or implement manual lifetime management.");
+
+    private static readonly DiagnosticDescriptor AW007NoInterface = new(
+        id: "AW007",
+        title: "Service registered without an interface abstraction",
+        messageFormat: "'{0}' is registered as a DI service but implements no non-system interfaces. Consider extracting an interface so consumers depend on an abstraction rather than the concrete type.",
+        category: "AutoWire",
+        defaultSeverity: DiagnosticSeverity.Info,
+        isEnabledByDefault: true,
+        description: "Extract an interface from this class so it can be replaced in tests or with alternate implementations without changing call sites.");
 
     // ── Attribute source ───────────────────────────────────────────────────────
     private const string AttributeSource = """
@@ -377,6 +387,27 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                 public string FactoryLifetime { get; set; } = "Singleton";
                 public FactoryAttribute(Type serviceType) { ServiceType = serviceType; }
             }
+
+            /// <summary>
+            /// Registers the decorated class as a typed <c>HttpClient</c> via
+            /// <c>services.AddHttpClient&lt;T&gt;()</c>.
+            /// Requires <c>Microsoft.Extensions.Http</c>.
+            /// </summary>
+            /// <example>
+            /// [HttpClient]
+            /// public class GitHubClient { public GitHubClient(HttpClient http) { } }
+            ///
+            /// [HttpClient(Name = "GitHub", BaseAddress = "https://api.github.com")]
+            /// public class GitHubClient { }
+            /// </example>
+            [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
+            public sealed class HttpClientAttribute : Attribute
+            {
+                /// <summary>Optional named-client name. When null the type name is used (typed client).</summary>
+                public string? Name { get; set; }
+                /// <summary>Optional base address set on the underlying <c>HttpClient</c>.</summary>
+                public string? BaseAddress { get; set; }
+            }
         }
         """;
 
@@ -443,6 +474,14 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
         RegisterTransientDisposableDiagnostics(context, TransientFqn);
         RegisterTransientDisposableDiagnostics(context, TryTransientFqn);
 
+        // ── AW007: no-interface diagnostics ───────────────────────────────────
+        RegisterNoInterfaceDiagnostics(context, ScopedFqn);
+        RegisterNoInterfaceDiagnostics(context, SingletonFqn);
+        RegisterNoInterfaceDiagnostics(context, TransientFqn);
+        RegisterNoInterfaceDiagnostics(context, TryScopedFqn);
+        RegisterNoInterfaceDiagnostics(context, TrySingletonFqn);
+        RegisterNoInterfaceDiagnostics(context, TryTransientFqn);
+
         // ── Convention scan pipeline ───────────────────────────────────────────
         var scannedRegs = CollectScanRegistrations(context);
 
@@ -452,6 +491,9 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
 
         // ── Options pipeline ───────────────────────────────────────────────────
         var optionsRegs = CollectOptions(context);
+
+        // ── HttpClient pipeline ────────────────────────────────────────────────
+        var httpClients = CollectHttpClients(context);
 
         // ── Combine all registrations + generate ──────────────────────────────
         var all = scoped.Collect()
@@ -467,20 +509,21 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             .Combine(scannedRegs.Collect())
             .Combine(factories.Collect())
             .Combine(optionsRegs.Collect())
+            .Combine(httpClients.Collect())
             .Combine(methodName);
 
         context.RegisterSourceOutput(all, static (ctx, combined) =>
         {
-            var (((((((((((((s, si), t), ts), tsi), tt), ds), dsi), dt), hs), sr), f), opts), name) = combined;
+            var ((((((((((((((s, si), t), ts), tsi), tt), ds), dsi), dt), hs), sr), f), opts), hc), name) = combined;
             var registrations = s.AddRange(si).AddRange(t).AddRange(ts).AddRange(tsi).AddRange(tt).AddRange(sr);
             var decorators    = ds.AddRange(dsi).AddRange(dt);
-            if (registrations.IsEmpty && decorators.IsEmpty && hs.IsEmpty && f.IsEmpty && opts.IsEmpty) return;
+            if (registrations.IsEmpty && decorators.IsEmpty && hs.IsEmpty && f.IsEmpty && opts.IsEmpty && hc.IsEmpty) return;
 
             ReportDuplicateServiceDiagnostics(ctx, registrations);
 
             ctx.AddSource(
                 "AutoWireServiceCollectionExtensions.g.cs",
-                SourceText.From(GenerateSource(registrations, decorators, hs, f, opts, name), Encoding.UTF8));
+                SourceText.From(GenerateSource(registrations, decorators, hs, f, opts, hc, name), Encoding.UTF8));
         });
     }
 
@@ -700,6 +743,46 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
 
         context.RegisterSourceOutput(disposables, static (ctx, d) =>
             ctx.ReportDiagnostic(d.Create(AW006TransientDisposable)));
+    }
+
+    // ── AW007 helper ──────────────────────────────────────────────────────────
+
+    private static void RegisterNoInterfaceDiagnostics(
+        IncrementalGeneratorInitializationContext context,
+        string attributeFqn)
+    {
+        var noInterface = context.SyntaxProvider
+            .ForAttributeWithMetadataName(
+                attributeFqn,
+                predicate: static (node, _) => node is ClassDeclarationSyntax,
+                transform: static (ctx, _) =>
+                {
+                    if (ctx.TargetSymbol is not INamedTypeSymbol { IsAbstract: false } sym) return null;
+
+                    // Check if explicit ServiceType is set — if so, no warning needed
+                    foreach (var attr in sym.GetAttributes())
+                    {
+                        foreach (var na in attr.NamedArguments)
+                            if (na.Key == "ServiceType" && na.Value.Value != null) return null;
+                    }
+
+                    // Check if the class has any non-system interfaces
+                    foreach (var iface in sym.AllInterfaces)
+                    {
+                        var ns = iface.ContainingNamespace?.ToDisplayString() ?? string.Empty;
+                        if (!ns.StartsWith("System", StringComparison.Ordinal) &&
+                            !ns.StartsWith("Microsoft", StringComparison.Ordinal))
+                            return null;
+                    }
+
+                    var loc = sym.Locations.Length > 0 ? sym.Locations[0] : Location.None;
+                    return new DiagnosticInfo("AW007", loc, new[] { sym.Name });
+                })
+            .Where(static d => d is not null)
+            .Select(static (d, _) => d!);
+
+        context.RegisterSourceOutput(noInterface, static (ctx, d) =>
+            ctx.ReportDiagnostic(d.Create(AW007NoInterface)));
     }
 
     private static bool TypeHasAutoWireAttribute(INamedTypeSymbol symbol, string attributeFqn)
@@ -1055,6 +1138,36 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             .Select(static (o, _) => o!);
     }
 
+    // ── HttpClient collection ──────────────────────────────────────────────────
+
+    private static IncrementalValuesProvider<HttpClientInfo> CollectHttpClients(
+        IncrementalGeneratorInitializationContext context)
+    {
+        return context.SyntaxProvider
+            .ForAttributeWithMetadataName(
+                HttpClientFqn,
+                predicate: static (node, _) => node is ClassDeclarationSyntax,
+                transform: static (ctx, _) =>
+                {
+                    if (ctx.TargetSymbol is not INamedTypeSymbol classSymbol) return null;
+                    var attr = ctx.Attributes[0];
+
+                    string? name = null;
+                    string? baseAddress = null;
+                    foreach (var na in attr.NamedArguments)
+                    {
+                        if (na.Key == "Name" && na.Value.Value is string n && n.Length > 0)
+                            name = n;
+                        else if (na.Key == "BaseAddress" && na.Value.Value is string b && b.Length > 0)
+                            baseAddress = b;
+                    }
+
+                    return new HttpClientInfo(ToFullyQualified(classSymbol), name, baseAddress);
+                })
+            .Where(static h => h is not null)
+            .Select(static (h, _) => h!);
+    }
+
     private static IncrementalValuesProvider<RegistrationInfo> CollectRegistrations(
         IncrementalGeneratorInitializationContext context,
         string attributeFqn,
@@ -1231,6 +1344,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
         ImmutableArray<string> hostedServices,
         ImmutableArray<FactoryInfo> factories,
         ImmutableArray<OptionsInfo> options,
+        ImmutableArray<HttpClientInfo> httpClients,
         string methodName)
     {
         var sb = new StringBuilder();
@@ -1372,6 +1486,37 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                 if (opt.ValidateOnStart)
                     chain += "\n            .ValidateOnStart()";
                 sb.AppendLine(chain + ";");
+            }
+        }
+
+        // ── HttpClient registrations ───────────────────────────────────────────
+        if (!httpClients.IsEmpty)
+        {
+            sb.AppendLine();
+            foreach (var hc in httpClients.OrderBy(static h => h.ImplementationType))
+            {
+                if (hc.Name is null && hc.BaseAddress is null)
+                {
+                    // Simple typed client
+                    sb.AppendLine($"        services.AddHttpClient<{hc.ImplementationType}>();");
+                }
+                else if (hc.Name is not null && hc.BaseAddress is not null)
+                {
+                    // Named client with base address + typed client binding
+                    sb.AppendLine($"        services.AddHttpClient(\"{hc.Name}\", static c => c.BaseAddress = new global::System.Uri(\"{hc.BaseAddress}\"))");
+                    sb.AppendLine($"            .AddTypedClient<{hc.ImplementationType}>();");
+                }
+                else if (hc.Name is not null)
+                {
+                    // Named client only
+                    sb.AppendLine($"        services.AddHttpClient(\"{hc.Name}\")");
+                    sb.AppendLine($"            .AddTypedClient<{hc.ImplementationType}>();");
+                }
+                else
+                {
+                    // Typed client with base address
+                    sb.AppendLine($"        services.AddHttpClient<{hc.ImplementationType}>(static c => c.BaseAddress = new global::System.Uri(\"{hc.BaseAddress}\"));");
+                }
             }
         }
 

@@ -278,3 +278,19 @@ public class EmailOptions
 
 [Options("Minimal", ValidateDataAnnotations = false, ValidateOnStart = false)]
 public class MinimalOptions { }
+
+// ── [HttpClient]: typed and named HTTP client registration ────────────────────
+
+[HttpClient]
+public class WeatherApiClient
+{
+    public WeatherApiClient(HttpClient http) { Http = http; }
+    public HttpClient Http { get; }
+}
+
+[HttpClient(Name = "GitHub", BaseAddress = "https://api.github.com")]
+public class GitHubApiClient
+{
+    public GitHubApiClient(HttpClient http) { Http = http; }
+    public HttpClient Http { get; }
+}

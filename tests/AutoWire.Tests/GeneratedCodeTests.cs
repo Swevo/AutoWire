@@ -592,4 +592,25 @@ public class GeneratedCodeTests
             d.ServiceType.GenericTypeArguments[0] == typeof(MinimalOptions));
         Assert.NotNull(descriptor);
     }
+
+    // ── [HttpClient] tests ─────────────────────────────────────────────────────
+
+    [Fact]
+    public void HttpClient_TypedClient_RegisteredViaAddHttpClient()
+    {
+        var services = new ServiceCollection();
+        services.AddAutoWireServices();
+        // AddHttpClient<T>() registers IHttpClientFactory and a typed client binding
+        var descriptor = services.FirstOrDefault(d => d.ServiceType == typeof(WeatherApiClient));
+        Assert.NotNull(descriptor);
+    }
+
+    [Fact]
+    public void HttpClient_NamedClient_RegisteredViaAddHttpClient()
+    {
+        var services = new ServiceCollection();
+        services.AddAutoWireServices();
+        var descriptor = services.FirstOrDefault(d => d.ServiceType == typeof(GitHubApiClient));
+        Assert.NotNull(descriptor);
+    }
 }
