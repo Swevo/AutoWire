@@ -138,6 +138,7 @@ public class CheckoutController(IOrderService orders, ICache cache)
 | `[Options("Section")]` | — | `services.AddOptions<T>().BindConfiguration("Section").ValidateDataAnnotations().ValidateOnStart()` |
 | `[HttpClient]` | — | `services.AddHttpClient<T>()` |
 | `[Validate]` | Scoped | `services.AddScoped<IValidator<T>, ValidatorClass>()` |
+| `[Interceptor(typeof(IFoo))]` | Scoped (proxy) | Generates a `file sealed` proxy class; registers it as `IFoo` implementation |
 
 All attributes (except `[HostedService]` and `[Factory]`) support these shared properties:
 
@@ -320,7 +321,7 @@ services.AddHostedService<global::DataSyncWorker>();
 
 ## Roslyn diagnostics
 
-AutoWire ships eight built-in diagnostics that surface problems **as squiggles in the IDE** — no runtime surprises.
+AutoWire ships ten built-in diagnostics that surface problems **as squiggles in the IDE** — no runtime surprises.
 
 | ID | Severity | Condition |
 |---|---|---|
@@ -332,6 +333,8 @@ AutoWire ships eight built-in diagnostics that surface problems **as squiggles i
 | AW006 | ⚠ Warning | `[Transient]` service implements `IDisposable` / `IAsyncDisposable` — container won't track disposal |
 | AW007 | ℹ Info | Registered class has **no non-system interfaces** — consider extracting an abstraction |
 | AW008 | ⚠ Warning | `[Singleton]` injects `IHttpContextAccessor` or `DbContext` — both are request/scope-bound |
+| AW009 | ⚠ Warning | `[HostedService]` injects a `[Scoped]` service — **captive dependency** in a long-lived background worker |
+| AW010 | ⚠ Warning | **Duplicate `[Interceptor]` targets** — two attributes on the same class target the same interface |
 
 ### AW001 example
 
@@ -378,6 +381,49 @@ public class ReportingService
         // ... use orders within the scope
     }
 }
+```
+
+### AW009 example
+
+```csharp
+// ⚠ AW009: 'DataSyncWorker' is a HostedService (effectively Singleton) and injects 'IOrderService' which is Scoped.
+[HostedService]
+public class DataSyncWorker : BackgroundService
+{
+    public DataSyncWorker(IOrderService orders) { }  // ← captive!
+}
+
+// ✅ Fix — inject IServiceScopeFactory (quick-fix available via Alt+Enter):
+[HostedService]
+public class DataSyncWorker : BackgroundService
+{
+    private readonly IServiceScopeFactory _scopeFactory;
+    public DataSyncWorker(IServiceScopeFactory scopeFactory) { _scopeFactory = scopeFactory; }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var orders = scope.ServiceProvider.GetRequiredService<IOrderService>();
+            await orders.SyncAsync(stoppingToken);
+            await Task.Delay(TimeSpan.FromMinutes(5), stoppingToken);
+        }
+    }
+}
+```
+
+### AW010 example
+
+```csharp
+// ⚠ AW010: Multiple [Interceptor] attributes on 'LoggingInterceptor' target the same interface 'IOrderService'.
+[Interceptor(typeof(IOrderService))]
+[Interceptor(typeof(IOrderService))]  // ← duplicate!
+public class LoggingInterceptor : IAutoWireInterceptor { ... }
+
+// ✅ Fix — remove the duplicate, or use separate interceptor classes:
+[Interceptor(typeof(IOrderService))]
+public class LoggingInterceptor : IAutoWireInterceptor { ... }
 ```
 
 AW004 covers both `[Singleton]` and `[TrySingleton]`, and detects scoped services registered via `[Scoped]` or `[TryScoped]`.
@@ -829,6 +875,149 @@ public class PaymentApiClient
 | `Name` | `null` (typed client) | Named-client name |
 | `BaseAddress` | `null` | Sets `HttpClient.BaseAddress` |
 | `Resilience` | `false` | Chains `.AddStandardResilienceHandler()` |
+| `Timeout` | `0` (no timeout set) | Sets `HttpClient.Timeout` via `TimeSpan.FromSeconds(n)` |
+| `DefaultHeaders` | `null` | `string[]` of `"Key:Value"` pairs — emits `c.DefaultRequestHeaders.Add(...)` |
+
+```csharp
+// Timeout + default headers
+[HttpClient(
+    BaseAddress = "https://api.myservice.com",
+    Timeout = 30,
+    DefaultHeaders = new[] { "Accept:application/json", "X-App-Id:myapp" })]
+public class MyApiClient
+{
+    public MyApiClient(HttpClient http) { Http = http; }
+    public HttpClient Http { get; }
+}
+// → services.AddHttpClient<MyApiClient>(static c => {
+//       c.BaseAddress = new Uri("https://api.myservice.com");
+//       c.Timeout = TimeSpan.FromSeconds(30);
+//       c.DefaultRequestHeaders.Add("Accept", "application/json");
+//       c.DefaultRequestHeaders.Add("X-App-Id", "myapp");
+//   });
+```
+
+---
+
+## FluentValidation — `[Validate]`
+
+`[Validate]` auto-registers a FluentValidation validator with a single attribute — no manual `services.AddScoped<IValidator<T>, MyValidator>()` required.
+
+Requires `FluentValidation` (or `FluentValidation.DependencyInjectionExtensions`). AutoWire only emits the registration code; it does not depend on FluentValidation itself.
+
+```csharp
+using FluentValidation;
+using AutoWire;
+
+[Validate]
+public class CreateOrderRequestValidator : AbstractValidator<CreateOrderRequest>
+{
+    public CreateOrderRequestValidator()
+    {
+        RuleFor(x => x.CustomerId).NotEmpty();
+        RuleFor(x => x.Items).NotEmpty();
+    }
+}
+// → services.AddScoped<IValidator<CreateOrderRequest>, CreateOrderRequestValidator>();
+```
+
+AutoWire walks the inheritance chain to find `AbstractValidator<T>` and extracts `T` automatically. Registration is Scoped (matching FluentValidation conventions).
+
+Inject `IValidator<T>` normally:
+
+```csharp
+public class OrderController(IValidator<CreateOrderRequest> validator, IOrderService orders)
+{
+    public async Task<IActionResult> Create(CreateOrderRequest request)
+    {
+        var result = await validator.ValidateAsync(request);
+        if (!result.IsValid) return BadRequest(result.Errors);
+        // ...
+    }
+}
+```
+
+---
+
+## AOP interceptors — `[Interceptor]`
+
+`[Interceptor(typeof(IMyService))]` generates a **compile-time proxy class** that wraps every method of the target interface through an `IAutoWireInterceptor` implementation — no Castle.DynamicProxy, no Autofac required.
+
+### Defining an interceptor
+
+```csharp
+using AutoWire;
+
+[Interceptor(typeof(IOrderService))]
+public class LoggingInterceptor : IAutoWireInterceptor
+{
+    private readonly ILogger<LoggingInterceptor> _logger;
+    public LoggingInterceptor(ILogger<LoggingInterceptor> logger) { _logger = logger; }
+
+    public void Intercept(IAutoWireInvocation invocation)
+    {
+        _logger.LogInformation("Calling {Method}", invocation.MethodName);
+        // Proceed is implicit — the proxy calls this interceptor once per method.
+        // To return a value: invocation.Result = /* computed value */;
+    }
+}
+```
+
+AutoWire generates a `file sealed` proxy class and registers it as the `IOrderService` implementation:
+
+```csharp
+// Generated:
+services.AddScoped<IOrderService>(sp =>
+    new AutoWire_Proxy_OrderService_with_LoggingInterceptor(
+        sp.GetRequiredService<LoggingInterceptor>()));
+services.AddScoped<LoggingInterceptor>();
+
+file sealed class AutoWire_Proxy_OrderService_with_LoggingInterceptor : IOrderService
+{
+    private readonly LoggingInterceptor _interceptor;
+    // ... proxy methods that call _interceptor.Intercept(invocation)
+}
+```
+
+### `IAutoWireInterceptor` and `IAutoWireInvocation`
+
+```csharp
+public interface IAutoWireInterceptor
+{
+    void Intercept(IAutoWireInvocation invocation);
+}
+
+public interface IAutoWireInvocation
+{
+    string MethodName { get; }
+    object?[] Arguments { get; }
+    object? Result { get; set; }   // set this to return a value from a non-void method
+}
+```
+
+### Controlling lifetime
+
+The proxy is registered with the same lifetime as the interceptor. Override with `Lifetime`:
+
+```csharp
+[Interceptor(typeof(IOrderService), Lifetime = "Singleton")]
+public class CachingInterceptor : IAutoWireInterceptor { ... }
+```
+
+### Supported method signatures
+
+| Method kind | Supported |
+|---|---|
+| `void` methods | ✅ |
+| Value-returning methods | ✅ — set `invocation.Result` |
+| `Task` / `ValueTask` | ✅ |
+| `Task<T>` / `ValueTask<T>` | ✅ — set `invocation.Result` |
+| Generic methods | ⛔ Skipped (proxy emits no wrapper) |
+| `ref` / `out` parameters | ⛔ Skipped |
+
+### AW010 — duplicate interceptor targets
+
+AW010 warns when two `[Interceptor]` attributes on the **same class** target the **same interface**. Only the first is registered; the duplicate is dropped silently.
 
 ---
 
@@ -912,13 +1101,14 @@ Available constants: `TotalCount` · `ScopedCount` · `SingletonCount` · `Trans
 
 ## Roslyn code fix providers
 
-AutoWire ships **IDE light-bulb fixes** for three diagnostics — click the squiggle, press `Alt+Enter`, and the fix is applied automatically:
+AutoWire ships **IDE light-bulb fixes** for four diagnostics — click the squiggle, press `Alt+Enter`, and the fix is applied automatically:
 
 | Diagnostic | Fix |
 |---|---|
 | AW001 — abstract class with attribute | *Remove the AutoWire attribute* |
 | AW003 — ServiceType not implemented | *Remove the explicit ServiceType argument* |
 | AW006 — Transient disposable | *Change `[Transient]` → `[Scoped]`* |
+| AW009 — Scoped in HostedService | *Replace with `IServiceScopeFactory` (rewrites constructor + adds private field)* |
 
 ---
 
@@ -1097,6 +1287,15 @@ Yes — look in `obj/Debug/net9.0/generated/AutoWire/AutoWire.AutoWireGenerator/
 
 **Q: Does it slow down my build?**
 Incremental source generators only re-run when a decorated class changes. The overhead on a clean build is negligible — far less than assembly scanning at runtime.
+
+**Q: Can I register FluentValidation validators automatically?**
+Yes — use `[Validate]` on your `AbstractValidator<T>` subclass. AutoWire walks the inheritance chain, extracts `T`, and emits `services.AddScoped<IValidator<T>, MyValidator>()`. No manual registration required. AutoWire itself doesn't depend on FluentValidation.
+
+**Q: Can I add AOP-style interception without a DI framework like Autofac?**
+Yes — use `[Interceptor(typeof(IMyService))]` on a class implementing `IAutoWireInterceptor`. AutoWire generates a compile-time proxy class (no reflection) that routes every non-generic instance method through `Intercept(IAutoWireInvocation)`. Set `invocation.Result` to return a value from value-returning methods.
+
+**Q: I'm getting AW009 — what does it mean?**
+`[HostedService]` classes run for the application's lifetime (equivalent to Singleton scope). Injecting a `[Scoped]` service directly creates a captive dependency — the scoped service is never released when its scope ends. Use the AW009 code fix (Alt+Enter) to automatically rewrite the constructor to accept `IServiceScopeFactory` instead, then create a short-lived scope inside `ExecuteAsync`.
 
 **Q: What frameworks are supported?**
 `net6.0` · `net7.0` · `net8.0` · `net9.0` · `netstandard2.0` · `netstandard2.1` — any project using `Microsoft.Extensions.DependencyInjection`. Keyed services require .NET 8+.
