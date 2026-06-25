@@ -1425,6 +1425,9 @@ I'm the author of AutoWire, **[AutoMap.Generator](https://github.com/Swevo/AutoM
 
 ## Also by the same author
 
+> 🌐 Full suite overview: **[swevo.github.io](https://swevo.github.io/)**
+
+
 | Package | Description |
 |---|---|
 | [**AutoMap.Generator**](https://github.com/Swevo/AutoMap.Generator) | Compile-time object mapping — `[Map(typeof(Dto))]` generates `ToDto()` extension methods. Zero reflection, AOT-safe. |
