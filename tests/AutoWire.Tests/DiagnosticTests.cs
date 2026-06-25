@@ -448,6 +448,107 @@ public class DiagnosticTests
         Assert.Contains("class RegistrationSummary", summary);
     }
 
+    // ── AW009: scoped dependency in HostedService ────────────────────────────
+
+    [Fact]
+    public void AW009_HostedServiceInjectingScoped_EmitsWarning()
+    {
+        var source = """
+            public interface IScopedService { }
+            [AutoWire.Scoped]
+            public class MyScopedService : IScopedService { }
+            [AutoWire.HostedService]
+            public class MyWorker : Microsoft.Extensions.Hosting.BackgroundService
+            {
+                public MyWorker(IScopedService svc) { }
+                protected override System.Threading.Tasks.Task ExecuteAsync(System.Threading.CancellationToken ct) => System.Threading.Tasks.Task.CompletedTask;
+            }
+            """;
+
+        var diagnostics = RunGenerator(source);
+        Assert.Contains(diagnostics, d => d.Id == "AW009");
+    }
+
+    [Fact]
+    public void AW009_HostedServiceInjectingSingleton_NoWarning()
+    {
+        var source = """
+            public interface ISingletonService { }
+            [AutoWire.Singleton]
+            public class MySingletonService : ISingletonService { }
+            [AutoWire.HostedService]
+            public class MyWorker : Microsoft.Extensions.Hosting.BackgroundService
+            {
+                public MyWorker(ISingletonService svc) { }
+                protected override System.Threading.Tasks.Task ExecuteAsync(System.Threading.CancellationToken ct) => System.Threading.Tasks.Task.CompletedTask;
+            }
+            """;
+
+        var diagnostics = RunGenerator(source);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "AW009");
+    }
+
+    // ── [Validate] attribute ───────────────────────────────────────────────────
+
+    [Fact]
+    public void Validate_EmitsFluentValidationRegistration()
+    {
+        var source = """
+            namespace FluentValidation
+            {
+                public abstract class AbstractValidator<T> { }
+                public interface IValidator<T> { }
+            }
+            public class MyModel { }
+            [AutoWire.Validate]
+            public class MyModelValidator : FluentValidation.AbstractValidator<MyModel> { }
+            """;
+
+        var (_, sources) = RunGeneratorWithSources(source);
+        var code = sources.First(s => s.HintName.Contains("ServiceCollectionExtensions")).SourceText.ToString();
+        Assert.Contains("global::FluentValidation.IValidator<global::MyModel>", code);
+        Assert.Contains("global::MyModelValidator", code);
+        Assert.Contains("AddScoped", code);
+    }
+
+    // ── [Interceptor] attribute ────────────────────────────────────────────────
+
+    [Fact]
+    public void Interceptor_EmitsProxyClassAndRegistration()
+    {
+        var source = """
+            public interface IMyService { string Greet(string name); }
+            [AutoWire.Interceptor(typeof(IMyService))]
+            public class LoggingInterceptor : AutoWire.IAutoWireInterceptor
+            {
+                public void Intercept(AutoWire.IAutoWireInvocation invocation) { }
+            }
+            """;
+
+        var (_, sources) = RunGeneratorWithSources(source);
+        var code = sources.First(s => s.HintName.Contains("ServiceCollectionExtensions")).SourceText.ToString();
+        Assert.Contains("AutoWire_Proxy_MyService_with_LoggingInterceptor", code);
+        Assert.Contains("IMyService", code);
+    }
+
+    [Fact]
+    public void Interceptor_ProxyClass_ImplementsInterface()
+    {
+        var source = """
+            public interface ICounter { int Increment(); }
+            [AutoWire.Interceptor(typeof(ICounter))]
+            public class TraceInterceptor : AutoWire.IAutoWireInterceptor
+            {
+                public void Intercept(AutoWire.IAutoWireInvocation invocation) { }
+            }
+            """;
+
+        var (_, sources) = RunGeneratorWithSources(source);
+        var code = sources.First(s => s.HintName.Contains("ServiceCollectionExtensions")).SourceText.ToString();
+        Assert.Contains(": global::ICounter", code);
+        Assert.Contains("Increment()", code);
+    }
+
     private static IReadOnlyList<Diagnostic> RunGenerator(string source)
     {
         var (diagnostics, _) = RunGeneratorWithSources(source);
