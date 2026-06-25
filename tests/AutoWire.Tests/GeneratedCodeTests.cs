@@ -517,4 +517,79 @@ public class GeneratedCodeTests
         Assert.NotNull(direct);
         Assert.IsType<HeavyService>(direct);
     }
+
+    // ── Enum-keyed services ────────────────────────────────────────────────────
+
+    [Fact]
+    public void EnumKey_Scoped_StripeGateway_ResolvableByEnumKey()
+    {
+        using var provider = BuildProvider();
+        using var scope = provider.CreateScope();
+        var gateway = scope.ServiceProvider.GetKeyedService<IPaymentGateway>(PaymentProvider.Stripe);
+        Assert.NotNull(gateway);
+        Assert.IsType<StripeGateway>(gateway);
+    }
+
+    [Fact]
+    public void EnumKey_Scoped_PayPalGateway_ResolvableByEnumKey()
+    {
+        using var provider = BuildProvider();
+        using var scope = provider.CreateScope();
+        var gateway = scope.ServiceProvider.GetKeyedService<IPaymentGateway>(PaymentProvider.PayPal);
+        Assert.NotNull(gateway);
+        Assert.IsType<PayPalGateway>(gateway);
+    }
+
+    [Fact]
+    public void EnumKey_DifferentKeys_ReturnDifferentInstances()
+    {
+        using var provider = BuildProvider();
+        using var scope = provider.CreateScope();
+        var stripe = scope.ServiceProvider.GetKeyedService<IPaymentGateway>(PaymentProvider.Stripe);
+        var paypal = scope.ServiceProvider.GetKeyedService<IPaymentGateway>(PaymentProvider.PayPal);
+        Assert.IsType<StripeGateway>(stripe);
+        Assert.IsType<PayPalGateway>(paypal);
+    }
+
+    // ── [Options] tests ────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Options_WithExplicitSection_GeneratesBindConfiguration()
+    {
+        // BindConfiguration registers IConfigureOptions<T> as a closed generic descriptor
+        var services = new ServiceCollection();
+        services.AddAutoWireServices();
+        var descriptor = services.FirstOrDefault(d =>
+            d.ServiceType.IsGenericType &&
+            d.ServiceType.GenericTypeArguments.Length == 1 &&
+            d.ServiceType.GetGenericTypeDefinition() == typeof(Microsoft.Extensions.Options.IConfigureOptions<>) &&
+            d.ServiceType.GenericTypeArguments[0] == typeof(AppFeaturesOptions));
+        Assert.NotNull(descriptor);
+    }
+
+    [Fact]
+    public void Options_WithNoSection_RegistersOptionsType()
+    {
+        var services = new ServiceCollection();
+        services.AddAutoWireServices();
+        var descriptor = services.FirstOrDefault(d =>
+            d.ServiceType.IsGenericType &&
+            d.ServiceType.GenericTypeArguments.Length == 1 &&
+            d.ServiceType.GetGenericTypeDefinition() == typeof(Microsoft.Extensions.Options.IConfigureOptions<>) &&
+            d.ServiceType.GenericTypeArguments[0] == typeof(EmailOptions));
+        Assert.NotNull(descriptor);
+    }
+
+    [Fact]
+    public void Options_MinimalFlags_OnlyBindConfiguration()
+    {
+        var services = new ServiceCollection();
+        services.AddAutoWireServices();
+        var descriptor = services.FirstOrDefault(d =>
+            d.ServiceType.IsGenericType &&
+            d.ServiceType.GenericTypeArguments.Length == 1 &&
+            d.ServiceType.GetGenericTypeDefinition() == typeof(Microsoft.Extensions.Options.IConfigureOptions<>) &&
+            d.ServiceType.GenericTypeArguments[0] == typeof(MinimalOptions));
+        Assert.NotNull(descriptor);
+    }
 }

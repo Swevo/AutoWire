@@ -244,3 +244,37 @@ public class HeavyService : IHeavyService
 {
     public string Load() => "loaded";
 }
+
+// ── Enum-keyed services: type-safe keyed registration ─────────────────────────
+
+public enum PaymentProvider { Stripe = 1, PayPal = 2 }
+
+public interface IPaymentGateway { string Charge(decimal amount); }
+
+[Scoped(Key = PaymentProvider.Stripe)]
+public class StripeGateway : IPaymentGateway { public string Charge(decimal amount) => $"stripe:{amount}"; }
+
+[Scoped(Key = PaymentProvider.PayPal)]
+public class PayPalGateway : IPaymentGateway { public string Charge(decimal amount) => $"paypal:{amount}"; }
+
+// ── [Options]: generates AddOptions<T>().BindConfiguration().ValidateDataAnnotations().ValidateOnStart() ──
+
+[Options("AppFeatures")]
+public class AppFeaturesOptions
+{
+    public bool EnableDarkMode { get; set; }
+    public int MaxItemsPerPage { get; set; } = 20;
+}
+
+// ── [Options] with no section (derives section from class name) ───────────────
+
+[Options]
+public class EmailOptions
+{
+    public string SmtpHost { get; set; } = "localhost";
+}
+
+// ── [Options] with ValidateDataAnnotations = false, ValidateOnStart = false ───
+
+[Options("Minimal", ValidateDataAnnotations = false, ValidateOnStart = false)]
+public class MinimalOptions { }

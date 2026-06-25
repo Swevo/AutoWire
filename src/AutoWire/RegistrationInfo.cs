@@ -8,7 +8,12 @@ internal sealed class RegistrationInfo
     public string ImplementationType { get; }
     public ImmutableArray<string> ServiceTypes { get; }
     public string Lifetime { get; }
-    public string? Key { get; }
+    /// <summary>
+    /// The ready-to-emit key expression. For string keys this is a quoted literal e.g. <c>"\"primary\""</c>.
+    /// For enum keys this is the fully-qualified member expression e.g. <c>global::MyApp.Provider.Stripe</c>.
+    /// Null when the service is not keyed.
+    /// </summary>
+    public string? KeyExpression { get; }
     public bool IsOpenGeneric { get; }
     public DuplicateStrategy DuplicateStrategy { get; }
     public bool IncludeSelf { get; }
@@ -21,7 +26,7 @@ internal sealed class RegistrationInfo
         string implementationType,
         ImmutableArray<string> serviceTypes,
         string lifetime,
-        string? key,
+        string? keyExpression,
         bool isOpenGeneric = false,
         DuplicateStrategy duplicateStrategy = DuplicateStrategy.Add,
         bool includeSelf = false,
@@ -33,7 +38,7 @@ internal sealed class RegistrationInfo
         ImplementationType = implementationType;
         ServiceTypes = serviceTypes;
         Lifetime = lifetime;
-        Key = key;
+        KeyExpression = keyExpression;
         IsOpenGeneric = isOpenGeneric;
         DuplicateStrategy = duplicateStrategy;
         IncludeSelf = includeSelf;
@@ -48,7 +53,7 @@ internal sealed class RegistrationInfo
         ImplementationType == other.ImplementationType &&
         SequenceEqual(ServiceTypes, other.ServiceTypes) &&
         Lifetime == other.Lifetime &&
-        Key == other.Key &&
+        KeyExpression == other.KeyExpression &&
         IsOpenGeneric == other.IsOpenGeneric &&
         DuplicateStrategy == other.DuplicateStrategy &&
         IncludeSelf == other.IncludeSelf &&
@@ -63,7 +68,7 @@ internal sealed class RegistrationInfo
         {
             var h = ImplementationType.GetHashCode();
             h = h * 397 ^ Lifetime.GetHashCode();
-            h = h * 397 ^ (Key?.GetHashCode() ?? 0);
+            h = h * 397 ^ (KeyExpression?.GetHashCode() ?? 0);
             h = h * 397 ^ IsOpenGeneric.GetHashCode();
             h = h * 397 ^ DuplicateStrategy.GetHashCode();
             h = h * 397 ^ IncludeSelf.GetHashCode();
