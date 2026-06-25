@@ -203,7 +203,7 @@ public class DiagnosticTests
             """;
 
         var (_, generatedSources) = RunGeneratorWithSources(source);
-        Assert.True(generatedSources.Any(s => s.HintName.Contains("ServiceCollectionExtensions")));
+        Assert.Contains(generatedSources, s => s.HintName.Contains("ServiceCollectionExtensions"));
         var generated = generatedSources.First(s => s.HintName.Contains("ServiceCollectionExtensions"));
         var code = generated.SourceText.ToString();
         Assert.Contains("AddOptions<global::DatabaseOptions>()", code);
@@ -221,7 +221,7 @@ public class DiagnosticTests
             """;
 
         var (_, generatedSources) = RunGeneratorWithSources(source);
-        Assert.True(generatedSources.Any(s => s.HintName.Contains("ServiceCollectionExtensions")));
+        Assert.Contains(generatedSources, s => s.HintName.Contains("ServiceCollectionExtensions"));
         var generated = generatedSources.First(s => s.HintName.Contains("ServiceCollectionExtensions"));
         var code = generated.SourceText.ToString();
         // "EmailOptions" → section = "Email"
@@ -237,7 +237,7 @@ public class DiagnosticTests
             """;
 
         var (_, generatedSources) = RunGeneratorWithSources(source);
-        Assert.True(generatedSources.Any(s => s.HintName.Contains("ServiceCollectionExtensions")));
+        Assert.Contains(generatedSources, s => s.HintName.Contains("ServiceCollectionExtensions"));
         var generated = generatedSources.First(s => s.HintName.Contains("ServiceCollectionExtensions"));
         var code = generated.SourceText.ToString();
         Assert.Contains(".BindConfiguration(\"Minimal\")", code);
@@ -256,12 +256,89 @@ public class DiagnosticTests
             """;
 
         var (_, generatedSources) = RunGeneratorWithSources(source);
-        Assert.True(generatedSources.Any(s => s.HintName.Contains("ServiceCollectionExtensions")));
+        Assert.Contains(generatedSources, s => s.HintName.Contains("ServiceCollectionExtensions"));
         var generated = generatedSources.First(s => s.HintName.Contains("ServiceCollectionExtensions"));
         var code = generated.SourceText.ToString();
         Assert.Contains("global::ServiceKey.Primary", code);
         // Should NOT have a quoted string key
         Assert.DoesNotContain("\"Primary\"", code);
+    }
+
+    // ── AW007: no-interface diagnostic ────────────────────────────────────────
+
+    [Fact]
+    public void AW007_ConcreteClassNoInterfaces_EmitsInfo()
+    {
+        var source = """
+            [AutoWire.Singleton]
+            public class SettingsService { }
+            """;
+
+        var diagnostics = RunGenerator(source);
+        Assert.Contains(diagnostics, d => d.Id == "AW007");
+    }
+
+    [Fact]
+    public void AW007_ClassWithExplicitServiceType_NoWarning()
+    {
+        var source = """
+            public interface ISettings { }
+            [AutoWire.Singleton(typeof(ISettings))]
+            public class SettingsService : ISettings { }
+            """;
+
+        var diagnostics = RunGenerator(source);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "AW007");
+    }
+
+    [Fact]
+    public void AW007_ClassWithUserInterface_NoWarning()
+    {
+        var source = """
+            public interface ISettingsService { }
+            [AutoWire.Singleton]
+            public class SettingsService : ISettingsService { }
+            """;
+
+        var diagnostics = RunGenerator(source);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "AW007");
+    }
+
+    // ── [HttpClient] generated code ───────────────────────────────────────────
+
+    [Fact]
+    public void HttpClient_TypedClient_EmitsAddHttpClient()
+    {
+        var source = """
+            [AutoWire.HttpClient]
+            public class WeatherClient
+            {
+                public WeatherClient(System.Net.Http.HttpClient http) { }
+            }
+            """;
+
+        var (_, sources) = RunGeneratorWithSources(source);
+        Assert.Contains(sources, s => s.HintName.Contains("ServiceCollectionExtensions"));
+        var code = sources.First(s => s.HintName.Contains("ServiceCollectionExtensions")).SourceText.ToString();
+        Assert.Contains("AddHttpClient<global::WeatherClient>()", code);
+    }
+
+    [Fact]
+    public void HttpClient_NamedClientWithBaseAddress_EmitsNamedClientChain()
+    {
+        var source = """
+            [AutoWire.HttpClient(Name = "GitHub", BaseAddress = "https://api.github.com")]
+            public class GitHubClient
+            {
+                public GitHubClient(System.Net.Http.HttpClient http) { }
+            }
+            """;
+
+        var (_, sources) = RunGeneratorWithSources(source);
+        var code = sources.First(s => s.HintName.Contains("ServiceCollectionExtensions")).SourceText.ToString();
+        Assert.Contains("AddHttpClient(\"GitHub\"", code);
+        Assert.Contains("https://api.github.com", code);
+        Assert.Contains("AddTypedClient<global::GitHubClient>()", code);
     }
 
     private static IReadOnlyList<Diagnostic> RunGenerator(string source)
