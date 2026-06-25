@@ -21,6 +21,11 @@ internal sealed class RegistrationInfo
     public bool IsScanned { get; }
     public string? Condition { get; }
     public bool IncludeLazy { get; }
+    /// <summary>
+    /// When set, this service is grouped into its own <c>Add{Module}Module()</c> extension method
+    /// and is NOT included in the main <c>AddAutoWireServices()</c> call.
+    /// </summary>
+    public string? Module { get; }
 
     public RegistrationInfo(
         string implementationType,
@@ -33,7 +38,8 @@ internal sealed class RegistrationInfo
         string? profile = null,
         bool isScanned = false,
         string? condition = null,
-        bool includeLazy = false)
+        bool includeLazy = false,
+        string? module = null)
     {
         ImplementationType = implementationType;
         ServiceTypes = serviceTypes;
@@ -46,6 +52,7 @@ internal sealed class RegistrationInfo
         IsScanned = isScanned;
         Condition = condition;
         IncludeLazy = includeLazy;
+        Module = module;
     }
 
     public override bool Equals(object? obj) =>
@@ -60,7 +67,8 @@ internal sealed class RegistrationInfo
         Profile == other.Profile &&
         IsScanned == other.IsScanned &&
         Condition == other.Condition &&
-        IncludeLazy == other.IncludeLazy;
+        IncludeLazy == other.IncludeLazy &&
+        Module == other.Module;
 
     public override int GetHashCode()
     {
@@ -76,6 +84,7 @@ internal sealed class RegistrationInfo
             h = h * 397 ^ IsScanned.GetHashCode();
             h = h * 397 ^ (Condition?.GetHashCode() ?? 0);
             h = h * 397 ^ IncludeLazy.GetHashCode();
+            h = h * 397 ^ (Module?.GetHashCode() ?? 0);
             foreach (var s in ServiceTypes)
                 h = h * 397 ^ s.GetHashCode();
             return h;

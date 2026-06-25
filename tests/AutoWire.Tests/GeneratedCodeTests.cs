@@ -613,4 +613,69 @@ public class GeneratedCodeTests
         var descriptor = services.FirstOrDefault(d => d.ServiceType == typeof(GitHubApiClient));
         Assert.NotNull(descriptor);
     }
+
+    // ── [AutoWireModule] tests ─────────────────────────────────────────────────
+
+    [Fact]
+    public void Module_ServiceNotInMainProvider()
+    {
+        // BankTransferService has Module = "Payments" — should NOT be in AddAutoWireServices()
+        using var provider = BuildProvider();
+        Assert.Null(provider.GetService<IPaymentService>());
+    }
+
+    [Fact]
+    public void Module_ServiceAvailableViaModuleMethod()
+    {
+        var services = new ServiceCollection();
+        services.AddPaymentsModule();
+        using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+        var svc = scope.ServiceProvider.GetService<IPaymentService>();
+        Assert.NotNull(svc);
+        Assert.IsType<BankTransferService>(svc);
+    }
+
+    [Fact]
+    public void Module_MultipleModulesGenerateSeparateMethods()
+    {
+        var services = new ServiceCollection();
+        services.AddNotificationsModule();
+        using var provider = services.BuildServiceProvider();
+        Assert.NotNull(provider.GetService<INotificationChannel>());
+        Assert.IsType<SmsChannel>(provider.GetService<INotificationChannel>());
+    }
+
+    // ── Resilience tests ───────────────────────────────────────────────────────
+
+    [Fact]
+    public void HttpClient_ResilientClient_Registered()
+    {
+        using var provider = BuildProvider();
+        Assert.NotNull(provider.GetService<ResilientApiClient>());
+    }
+
+    // ── Registration summary tests ─────────────────────────────────────────────
+
+    [Fact]
+    public void Summary_TotalCountIsPositive()
+    {
+        Assert.True(AutoWire.RegistrationSummary.TotalCount > 0);
+    }
+
+    [Fact]
+    public void Summary_CountsMatchExpectedBreakdown()
+    {
+        var total = AutoWire.RegistrationSummary.TotalCount;
+        var expected = AutoWire.RegistrationSummary.ScopedCount
+            + AutoWire.RegistrationSummary.SingletonCount
+            + AutoWire.RegistrationSummary.TransientCount;
+        Assert.Equal(total, expected);
+    }
+
+    [Fact]
+    public void Summary_RegisteredImplementationsNotEmpty()
+    {
+        Assert.NotEmpty(AutoWire.RegistrationSummary.RegisteredImplementations);
+    }
 }
