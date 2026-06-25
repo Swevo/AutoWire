@@ -144,7 +144,8 @@ All attributes (except `[HostedService]` and `[Factory]`) support these shared p
 
 | Property | Type | Description |
 |---|---|---|
-| `ServiceType` | `Type?` | Explicit service type. Default: all non-system interfaces |
+| `ServiceType` | `Type?` | Single explicit service type. Default: all non-system interfaces |
+| *(multi-type)* | `(Type, Type, params Type[])` | Two or more explicit service types in one attribute: `[Scoped(typeof(IFoo), typeof(IBar))]` |
 | `Key` | `object?` | Keyed service key — accepts a `string` or any `enum` value (.NET 8+) |
 | `Duplicate` | `DuplicateStrategy` | `Add` / `Skip` / `Replace` |
 | `IncludeSelf` | `bool` | Also register as concrete type |
@@ -159,6 +160,9 @@ All attributes (except `[HostedService]` and `[Factory]`) support these shared p
 
 // Register against one specific interface
 [Scoped(typeof(IMyService))]
+
+// Register against multiple interfaces in one attribute (v1.18.0+)
+[Scoped(typeof(IOrderReader), typeof(IOrderWriter))]
 
 // Keyed service (.NET 8+)
 [Scoped(Key = "keyName")]
@@ -205,18 +209,23 @@ public class NotificationService : INotificationService, IEmailSender { }
 
 ## Multiple attributes on one class
 
-All attributes support `AllowMultiple = true`. Use this to register a single class against **several explicitly-specified interfaces**:
+All attributes support `AllowMultiple = true`. You can register a class against **several explicitly-specified interfaces** using either one attribute with multiple types, or stacked attributes:
 
 ```csharp
-// Without AllowMultiple you'd need a single attribute and auto-discovery.
-// With AllowMultiple you can pick exactly which interfaces win:
-[Scoped(typeof(IOrderReader))]
-[Scoped(typeof(IOrderWriter))]
+// ✅ Preferred (v1.18.0+) — one attribute, multiple types
+[Scoped(typeof(IOrderReader), typeof(IOrderWriter))]
 public class OrderService : IOrderReader, IOrderWriter, IDisposable { }
 // → services.AddScoped<IOrderReader, OrderService>();
 // → services.AddScoped<IOrderWriter, OrderService>();
-// IDisposable is excluded from both registrations.
+// IDisposable is excluded.
+
+// Also works — stacked attributes (equivalent, any version)
+[Scoped(typeof(IOrderReader))]
+[Scoped(typeof(IOrderWriter))]
+public class OrderService : IOrderReader, IOrderWriter, IDisposable { }
 ```
+
+AW003 validates **all types** in the multi-type constructor — any unimplemented interface is a build error.
 
 ---
 
@@ -321,7 +330,7 @@ services.AddHostedService<global::DataSyncWorker>();
 
 ## Roslyn diagnostics
 
-AutoWire ships ten built-in diagnostics that surface problems **as squiggles in the IDE** — no runtime surprises.
+AutoWire ships **eleven built-in diagnostics** that surface problems **as squiggles in the IDE** — no runtime surprises.
 
 | ID | Severity | Condition |
 |---|---|---|
@@ -335,6 +344,7 @@ AutoWire ships ten built-in diagnostics that surface problems **as squiggles in 
 | AW008 | ⚠ Warning | `[Singleton]` injects `IHttpContextAccessor` or `DbContext` — both are request/scope-bound |
 | AW009 | ⚠ Warning | `[HostedService]` injects a `[Scoped]` service — **captive dependency** in a long-lived background worker |
 | AW010 | ⚠ Warning | **Duplicate `[Interceptor]` targets** — two attributes on the same class target the same interface |
+| AW011 | ⚠ Warning | `[Interceptor]` target interface has **no interceptable methods** — proxy would be empty |
 
 ### AW001 example
 
@@ -424,6 +434,21 @@ public class LoggingInterceptor : IAutoWireInterceptor { ... }
 // ✅ Fix — remove the duplicate, or use separate interceptor classes:
 [Interceptor(typeof(IOrderService))]
 public class LoggingInterceptor : IAutoWireInterceptor { ... }
+```
+
+### AW011 example
+
+```csharp
+// ⚠ AW011: The interface 'IEmptyContract' passed to [Interceptor] on 'MyInterceptor'
+//           has no non-generic, non-ref/out instance methods. The proxy will be empty.
+public interface IEmptyContract { }   // no methods!
+[Interceptor(typeof(IEmptyContract))]
+public class MyInterceptor : IAutoWireInterceptor { ... }
+
+// ✅ Fix — pass an interface that has instance methods:
+public interface IOrderService { string GetStatus(); }
+[Interceptor(typeof(IOrderService))]
+public class MyInterceptor : IAutoWireInterceptor { ... }
 ```
 
 AW004 covers both `[Singleton]` and `[TrySingleton]`, and detects scoped services registered via `[Scoped]` or `[TryScoped]`.
@@ -877,6 +902,21 @@ public class PaymentApiClient
 | `Resilience` | `false` | Chains `.AddStandardResilienceHandler()` |
 | `Timeout` | `0` (no timeout set) | Sets `HttpClient.Timeout` via `TimeSpan.FromSeconds(n)` |
 | `DefaultHeaders` | `null` | `string[]` of `"Key:Value"` pairs — emits `c.DefaultRequestHeaders.Add(...)` |
+| `UseFactory` | `false` | Registers via `IHttpClientFactory` instead of typed client — requires `Name` to be set |
+
+### `UseFactory` — shared named client
+
+When multiple consumers share the same named client configuration, use `UseFactory = true`. AutoWire registers the named client once and emits a factory delegate that resolves it via `IHttpClientFactory`:
+
+```csharp
+[HttpClient(Name = "GitHub", BaseAddress = "https://api.github.com", UseFactory = true)]
+public class GitHubReposService { ... }
+// → services.AddHttpClient("GitHub", c => c.BaseAddress = new Uri("https://api.github.com"));
+// → services.AddScoped(sp =>
+//       sp.GetRequiredService<IHttpClientFactory>().CreateClient("GitHub"));
+```
+
+This lets other classes also call `factory.CreateClient("GitHub")` without duplicating the configuration.
 
 ```csharp
 // Timeout + default headers
@@ -1260,14 +1300,16 @@ Yes — use `[DecorateScoped(typeof(IService))]`, `[DecorateSingleton]`, or `[De
 **Q: I'm writing a NuGet library and don't want to override my consumer's registrations. What should I use?**
 Use `[TryScoped]`, `[TrySingleton]`, or `[TryTransient]`. These generate `TryAddScoped/Singleton/Transient` calls — the registration is silently skipped if the service type is already registered by the consumer.
 
+**Q: I'm getting AW011 — what does it mean?**
+AW011 fires when `[Interceptor(typeof(IFoo))]` is applied and `IFoo` has no methods that can be proxied (i.e., no non-generic, non-ref/out instance methods). The proxy class would be generated but would be empty — the interception has no effect. Check that you passed an interface type (not a concrete class), and that the interface declares at least one instance method.
+
 **Q: Can I register one class against multiple interfaces?**
-Yes — since `AllowMultiple = true`, you can stack attributes:
-```csharp
-[Scoped(typeof(IOrderReader))]
-[Scoped(typeof(IOrderWriter))]
-public class OrderService : IOrderReader, IOrderWriter { }
-```
-Without stacking, AutoWire auto-discovers ALL non-system interfaces, which achieves the same result when you want all of them.
+Yes — three ways, in order of preference:
+1. **Single attribute, multiple types** (v1.18.0+): `[Scoped(typeof(IOrderReader), typeof(IOrderWriter))]` — cleanest, one line.
+2. **Stacked attributes**: `[Scoped(typeof(IOrderReader))]` + `[Scoped(typeof(IOrderWriter))]` — more verbose, works in all versions.
+3. **Auto-discovery**: just `[Scoped]` — AutoWire registers against ALL non-system interfaces automatically.
+
+AW003 validates all types in the multi-type constructor at compile time.
 
 **Q: My test project also uses AutoWire and I'm getting an ambiguous method error.**
 Add `[assembly: AutoWire.AutoWireOptions(MethodName = "AddTestServices")]` to your test project. This renames the generated method so each project has a unique one.
