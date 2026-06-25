@@ -1419,7 +1419,7 @@ cd samples/Worker && dotnet run
 
 ## 💼 Need .NET consulting?
 
-I'm the author of AutoWire, **[AutoMap](https://github.com/Swevo/AutoMap)** (compile-time object mapping), and a suite of 28+ Polly v8 resilience packages. I'm available for consulting on **Polly v8 resilience**, **Azure cloud architecture**, and **clean .NET design**.
+I'm the author of AutoWire, **[AutoMap.Generator](https://github.com/Swevo/AutoMap.Generator)** (compile-time object mapping), and a suite of 28+ Polly v8 resilience packages. I'm available for consulting on **Polly v8 resilience**, **Azure cloud architecture**, and **clean .NET design**.
 
 **[→ solidqualitysolutions.com](https://www.solidqualitysolutions.com/)** · **[LinkedIn](https://www.linkedin.com/in/justbannister/)**
 
@@ -1427,7 +1427,7 @@ I'm the author of AutoWire, **[AutoMap](https://github.com/Swevo/AutoMap)** (com
 
 | Package | Description |
 |---|---|
-| [**AutoMap**](https://github.com/Swevo/AutoMap) | Compile-time object mapping — `[Map(typeof(Dto))]` generates `ToDto()` extension methods. Zero reflection, AOT-safe. |
+| [**AutoMap.Generator**](https://github.com/Swevo/AutoMap.Generator) | Compile-time object mapping — `[Map(typeof(Dto))]` generates `ToDto()` extension methods. Zero reflection, AOT-safe. |
 
 ## License
 
