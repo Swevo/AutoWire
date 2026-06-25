@@ -135,18 +135,22 @@ public class CheckoutController(IOrderService orders, ICache cache)
 | `[TryTransient]` | Transient | `services.TryAddTransient<TService, TImpl>()` |
 | `[HostedService]` | Singleton | `services.AddHostedService<T>()` |
 | `[Factory(typeof(IFoo))]` | Singleton (factory) + Scoped (product) | `services.AddSingleton<FooFactory>()` + `services.AddScoped<IFoo>(sp => ...)` |
+| `[Options("Section")]` | — | `services.AddOptions<T>().BindConfiguration("Section").ValidateDataAnnotations().ValidateOnStart()` |
+| `[HttpClient]` | — | `services.AddHttpClient<T>()` |
+| `[Validate]` | Scoped | `services.AddScoped<IValidator<T>, ValidatorClass>()` |
 
 All attributes (except `[HostedService]` and `[Factory]`) support these shared properties:
 
 | Property | Type | Description |
 |---|---|---|
 | `ServiceType` | `Type?` | Explicit service type. Default: all non-system interfaces |
-| `Key` | `string?` | Keyed service key (.NET 8+) |
+| `Key` | `object?` | Keyed service key — accepts a `string` or any `enum` value (.NET 8+) |
 | `Duplicate` | `DuplicateStrategy` | `Add` / `Skip` / `Replace` |
 | `IncludeSelf` | `bool` | Also register as concrete type |
 | `Profile` | `string?` | Only register when profile matches |
 | `Condition` | `string?` | Wrap in `#if SYMBOL ... #endif` at compile time |
 | `IncludeLazy` | `bool` | Also register `Lazy<T>` via `AddTransient` |
+| `Module` | `string?` | Place service in a named module — excluded from `AddAutoWireServices()`, gets its own `Add{Module}Module()` method |
 
 ```csharp
 // Auto-discover all non-system interfaces
@@ -316,7 +320,7 @@ services.AddHostedService<global::DataSyncWorker>();
 
 ## Roslyn diagnostics
 
-AutoWire ships five built-in diagnostics that surface problems **as squiggles in the IDE** — no runtime surprises.
+AutoWire ships eight built-in diagnostics that surface problems **as squiggles in the IDE** — no runtime surprises.
 
 | ID | Severity | Condition |
 |---|---|---|
@@ -325,6 +329,9 @@ AutoWire ships five built-in diagnostics that surface problems **as squiggles in
 | AW003 | ❌ Error | Explicit `ServiceType` in `[Scoped(typeof(IFoo))]` is **not implemented** by the decorated class |
 | AW004 | ⚠ Warning | `[Singleton]` depends on a `[Scoped]` service — **captive dependency** that bypasses scope disposal |
 | AW005 | ⚠ Warning | A type matches **more than one** `[AutoWireScan]` configuration — first match wins |
+| AW006 | ⚠ Warning | `[Transient]` service implements `IDisposable` / `IAsyncDisposable` — container won't track disposal |
+| AW007 | ℹ Info | Registered class has **no non-system interfaces** — consider extracting an abstraction |
+| AW008 | ⚠ Warning | `[Singleton]` injects `IHttpContextAccessor` or `DbContext` — both are request/scope-bound |
 
 ### AW001 example
 
@@ -733,6 +740,188 @@ If the inner service wasn't registered via AutoWire (e.g. registered manually in
 
 ---
 
+## Options binding — `[Options]`
+
+`[Options]` generates the full `AddOptions<T>().BindConfiguration().ValidateDataAnnotations().ValidateOnStart()` chain — eliminating boilerplate for every configuration class.
+
+Requires `Microsoft.Extensions.Options.ConfigurationExtensions`, `Microsoft.Extensions.Options.DataAnnotations`, and `Microsoft.Extensions.Hosting.Abstractions`.
+
+```csharp
+// Section name is "Database" (explicit)
+[Options("Database")]
+public class DatabaseOptions
+{
+    [Required] public string ConnectionString { get; set; } = "";
+    public int MaxConnections { get; set; } = 10;
+}
+
+// Section name derived from class name: "EmailOptions" → "Email"
+[Options]
+public class EmailOptions
+{
+    public string SmtpHost { get; set; } = "localhost";
+}
+
+// Opt out of validation
+[Options("Minimal", ValidateDataAnnotations = false, ValidateOnStart = false)]
+public class MinimalOptions { }
+```
+
+Generated:
+
+```csharp
+services.AddOptions<DatabaseOptions>()
+    .BindConfiguration("Database")
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+```
+
+| Property | Default | Description |
+|---|---|---|
+| Constructor arg | class name (sans "Options") | Configuration section key |
+| `ValidateDataAnnotations` | `true` | Chain `.ValidateDataAnnotations()` |
+| `ValidateOnStart` | `true` | Chain `.ValidateOnStart()` — throws on invalid config at startup |
+
+---
+
+## HTTP clients — `[HttpClient]`
+
+`[HttpClient]` generates `services.AddHttpClient<T>()` with optional named-client configuration. Requires `Microsoft.Extensions.Http`.
+
+```csharp
+// Simple typed client
+[HttpClient]
+public class WeatherApiClient
+{
+    public WeatherApiClient(HttpClient http) { Http = http; }
+    public HttpClient Http { get; }
+}
+// → services.AddHttpClient<WeatherApiClient>();
+
+// Named client with base address
+[HttpClient(Name = "GitHub", BaseAddress = "https://api.github.com")]
+public class GitHubApiClient
+{
+    public GitHubApiClient(HttpClient http) { Http = http; }
+    public HttpClient Http { get; }
+}
+// → services.AddHttpClient("GitHub", c => c.BaseAddress = new Uri("https://api.github.com"))
+//           .AddTypedClient<GitHubApiClient>();
+```
+
+### Resilience policies
+
+Set `Resilience = true` to chain `.AddStandardResilienceHandler()`, which adds retry, circuit-breaker, and timeout policies backed by `Microsoft.Extensions.Http.Resilience`:
+
+```csharp
+[HttpClient(Resilience = true)]
+public class PaymentApiClient
+{
+    public PaymentApiClient(HttpClient http) { Http = http; }
+    public HttpClient Http { get; }
+}
+// → services.AddHttpClient<PaymentApiClient>()
+//           .AddStandardResilienceHandler();
+```
+
+| Property | Default | Description |
+|---|---|---|
+| `Name` | `null` (typed client) | Named-client name |
+| `BaseAddress` | `null` | Sets `HttpClient.BaseAddress` |
+| `Resilience` | `false` | Chains `.AddStandardResilienceHandler()` |
+
+---
+
+## Feature modules — `Module`
+
+Use the `Module` property to group related services into an opt-in named module. Module services are **excluded from `AddAutoWireServices()`** and instead get their own generated extension method.
+
+```csharp
+// These services are NOT in AddAutoWireServices() — they're in AddPaymentsModule()
+[Scoped(Module = "Payments")]
+public class BankTransferService : IPaymentService { }
+
+[Scoped(Module = "Payments")]
+public class StripePaymentService : IPaymentService { }
+
+// Different module
+[Singleton(Module = "Notifications")]
+public class SmsChannel : INotificationChannel { }
+```
+
+```csharp
+// Program.cs
+builder.Services.AddAutoWireServices();  // core services only
+
+// Enable modules you want
+builder.Services.AddPaymentsModule();
+builder.Services.AddNotificationsModule();
+```
+
+AutoWire generates a separate extension method for each unique module name:
+
+```csharp
+public static IServiceCollection AddPaymentsModule(this IServiceCollection services)
+{
+    services.AddScoped<IPaymentService, BankTransferService>();
+    services.AddScoped<IPaymentService, StripePaymentService>();
+    return services;
+}
+```
+
+### When to use modules
+
+- **Feature flags** — ship code for a feature but only activate it when the module is registered
+- **Optional integrations** — separate "core" from "Azure Storage", "Stripe", "SendGrid" modules
+- **Microservice extraction** — move a module to its own project incrementally without breaking callers
+
+---
+
+## Multi-assembly scanning
+
+`[AutoWireScan]` can scan a **different assembly** by pointing its `AssemblyOf` property at any public type from that assembly:
+
+```csharp
+// Scan the "External.Services" namespace in the assembly that contains MarkerType
+[assembly: AutoWireScan("External.Services", AssemblyOf = typeof(External.MarkerType))]
+```
+
+AutoWire scans only `public` non-abstract classes from the external assembly and respects `[AutoWireExclude]` for classes in your own assembly.
+
+---
+
+## Registration summary — `RegistrationSummary`
+
+AutoWire generates `AutoWireRegistrationSummary.g.cs` alongside the extension method — a compile-time snapshot of every service count, useful for startup logging and diagnostics:
+
+```csharp
+using AutoWire;
+
+// In your startup code:
+logger.LogInformation(
+    "AutoWire registered {Total} services ({Scoped} scoped, {Singleton} singleton, {Transient} transient)",
+    RegistrationSummary.TotalCount,
+    RegistrationSummary.ScopedCount,
+    RegistrationSummary.SingletonCount,
+    RegistrationSummary.TransientCount);
+```
+
+Available constants: `TotalCount` · `ScopedCount` · `SingletonCount` · `TransientCount` · `HostedServiceCount` · `FactoryCount` · `HttpClientCount` · `ModuleServiceCount` · `RegisteredImplementations` (string array).
+
+---
+
+## Roslyn code fix providers
+
+AutoWire ships **IDE light-bulb fixes** for three diagnostics — click the squiggle, press `Alt+Enter`, and the fix is applied automatically:
+
+| Diagnostic | Fix |
+|---|---|
+| AW001 — abstract class with attribute | *Remove the AutoWire attribute* |
+| AW003 — ServiceType not implemented | *Remove the explicit ServiceType argument* |
+| AW006 — Transient disposable | *Change `[Transient]` → `[Scoped]`* |
+
+---
+
 ## How it works
 
 AutoWire is a [Roslyn incremental source generator](https://learn.microsoft.com/en-us/dotnet/csharp/roslyn-sdk/source-generators-overview). At **build time** it:
@@ -812,6 +1001,29 @@ public class CheckoutService([FromKeyedServices("stripe")] IPaymentGateway gatew
 ```
 
 > **Note:** Keyed services require `Microsoft.Extensions.DependencyInjection` 8.0+. The `[Keyed]` property is available on all frameworks; the generated `AddKeyedScoped/Singleton/Transient` calls only compile on .NET 8+.
+
+### Enum-keyed services
+
+The `Key` property accepts **any enum value**, not just strings. AutoWire emits the fully-qualified enum member expression so resolution is type-safe at compile time:
+
+```csharp
+public enum PaymentProvider { Stripe = 1, PayPal = 2 }
+
+[Scoped(Key = PaymentProvider.Stripe)]
+public class StripeGateway : IPaymentGateway { }
+
+[Scoped(Key = PaymentProvider.PayPal)]
+public class PayPalGateway : IPaymentGateway { }
+
+// Generated:
+// services.AddKeyedScoped<IPaymentGateway, StripeGateway>(global::PaymentProvider.Stripe);
+// services.AddKeyedScoped<IPaymentGateway, PayPalGateway>(global::PaymentProvider.PayPal);
+```
+
+```csharp
+// Resolve — no magic strings
+var gateway = provider.GetKeyedService<IPaymentGateway>(PaymentProvider.Stripe);
+```
 
 ---
 

@@ -29,6 +29,8 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
     private const string FactoryFqn           = "AutoWire.FactoryAttribute";
     private const string OptionsBindingFqn    = "AutoWire.OptionsAttribute";
     private const string HttpClientFqn        = "AutoWire.HttpClientAttribute";
+    private const string ValidateFqn          = "AutoWire.ValidateAttribute";
+    private const string InterceptorFqn       = "AutoWire.InterceptorAttribute";
 
     // ── Diagnostics ────────────────────────────────────────────────────────────
     private static readonly DiagnosticDescriptor AW001AbstractClass = new(
@@ -102,6 +104,15 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
         defaultSeverity: DiagnosticSeverity.Warning,
         isEnabledByDefault: true,
         description: "IHttpContextAccessor and DbContext are not safe for Singleton injection. Move the consuming class to Scoped lifetime, or resolve the dependency inside a manually created scope via IServiceScopeFactory.");
+
+    private static readonly DiagnosticDescriptor AW009ScopedInHostedService = new(
+        id: "AW009",
+        title: "HostedService injects a Scoped service",
+        messageFormat: "'{0}' is a HostedService (effectively Singleton) and injects '{1}' which is registered as Scoped. The Scoped service will be captured for the application lifetime, bypassing disposal. Inject IServiceScopeFactory and create a scope inside ExecuteAsync instead.",
+        category: "AutoWire",
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "HostedService / BackgroundService runs for the application lifetime and acts like a Singleton. Injecting a Scoped service directly creates a captive dependency. Use IServiceScopeFactory to create a fresh scope per unit of work.");
 
     // ── Attribute source ───────────────────────────────────────────────────────
     private const string AttributeSource = """
@@ -434,6 +445,68 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                 /// </summary>
                 public bool Resilience { get; set; }
             }
+
+            /// <summary>
+            /// Registers the decorated <see cref="FluentValidation.AbstractValidator{T}"/> subclass as
+            /// <c>services.AddScoped&lt;IValidator&lt;T&gt;, ValidatorClass&gt;()</c>.
+            /// Requires <c>FluentValidation</c>.
+            /// </summary>
+            /// <example>
+            /// [Validate]
+            /// public class CreateOrderCommandValidator : AbstractValidator&lt;CreateOrderCommand&gt; { }
+            /// // → services.AddScoped&lt;IValidator&lt;CreateOrderCommand&gt;, CreateOrderCommandValidator&gt;();
+            /// </example>
+            [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
+            public sealed class ValidateAttribute : Attribute { }
+
+            /// <summary>
+            /// Registers the decorated class as a compile-time interceptor for the specified service type.
+            /// AutoWire generates a proxy class implementing <typeparamref name="TService"/> that routes every
+            /// method call through this class's <see cref="IAutoWireInterceptor.Intercept"/> implementation.
+            /// No runtime proxy library required — the proxy is emitted as C# source at build time.
+            /// </summary>
+            /// <example>
+            /// [Interceptor(typeof(IOrderService))]
+            /// public class LoggingInterceptor : IAutoWireInterceptor
+            /// {
+            ///     public void Intercept(IAutoWireInvocation inv)
+            ///     {
+            ///         Console.WriteLine($"Calling {inv.MethodName}");
+            ///         inv.Proceed();
+            ///     }
+            /// }
+            /// </example>
+            [AttributeUsage(AttributeTargets.Class, AllowMultiple = true, Inherited = false)]
+            public sealed class InterceptorAttribute : Attribute
+            {
+                /// <summary>The interface type to intercept. A compile-time proxy implementing this interface will be generated.</summary>
+                public Type ServiceType { get; }
+                /// <summary>The DI lifetime for both the proxy and the interceptor. Default is <c>"Scoped"</c>.</summary>
+                public string Lifetime { get; set; } = "Scoped";
+                public InterceptorAttribute(Type serviceType) { ServiceType = serviceType; }
+            }
+
+            /// <summary>
+            /// Implement this interface on your interceptor class to intercept method calls routed through
+            /// the AutoWire-generated proxy.
+            /// </summary>
+            public interface IAutoWireInterceptor
+            {
+                void Intercept(IAutoWireInvocation invocation);
+            }
+
+            /// <summary>Represents a single method invocation being intercepted.</summary>
+            public interface IAutoWireInvocation
+            {
+                /// <summary>The name of the intercepted method.</summary>
+                string MethodName { get; }
+                /// <summary>The arguments passed to the method. You may modify them before calling <see cref="Proceed"/>.</summary>
+                object?[] Arguments { get; }
+                /// <summary>Gets or sets the return value. Set this before <see cref="Proceed"/> to short-circuit; or override after Proceed to change the result.</summary>
+                object? ReturnValue { get; set; }
+                /// <summary>Calls the actual inner implementation. Must be called to complete the invocation unless you want to short-circuit.</summary>
+                void Proceed();
+            }
         }
         """;
 
@@ -519,11 +592,20 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
         RegisterCaptiveDependencyDiagnostics(context);
         RegisterAmbiguousScanDiagnostics(context);
 
+        // ── AW009: Scoped in HostedService diagnostics ────────────────────────
+        RegisterScopedInHostedServiceDiagnostics(context);
+
         // ── Options pipeline ───────────────────────────────────────────────────
         var optionsRegs = CollectOptions(context);
 
         // ── HttpClient pipeline ────────────────────────────────────────────────
         var httpClients = CollectHttpClients(context);
+
+        // ── Validator pipeline ─────────────────────────────────────────────────
+        var validators = CollectValidators(context);
+
+        // ── Interceptor pipeline ───────────────────────────────────────────────
+        var interceptors = CollectInterceptors(context);
 
         // ── Combine all registrations + generate ──────────────────────────────
         var all = scoped.Collect()
@@ -540,20 +622,22 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             .Combine(factories.Collect())
             .Combine(optionsRegs.Collect())
             .Combine(httpClients.Collect())
+            .Combine(validators.Collect())
+            .Combine(interceptors.Collect())
             .Combine(methodName);
 
         context.RegisterSourceOutput(all, static (ctx, combined) =>
         {
-            var ((((((((((((((s, si), t), ts), tsi), tt), ds), dsi), dt), hs), sr), f), opts), hc), name) = combined;
+            var ((((((((((((((((s, si), t), ts), tsi), tt), ds), dsi), dt), hs), sr), f), opts), hc), val), intc), name) = combined;
             var registrations = s.AddRange(si).AddRange(t).AddRange(ts).AddRange(tsi).AddRange(tt).AddRange(sr);
             var decorators    = ds.AddRange(dsi).AddRange(dt);
-            if (registrations.IsEmpty && decorators.IsEmpty && hs.IsEmpty && f.IsEmpty && opts.IsEmpty && hc.IsEmpty) return;
+            if (registrations.IsEmpty && decorators.IsEmpty && hs.IsEmpty && f.IsEmpty && opts.IsEmpty && hc.IsEmpty && val.IsEmpty && intc.IsEmpty) return;
 
             ReportDuplicateServiceDiagnostics(ctx, registrations);
 
             ctx.AddSource(
                 "AutoWireServiceCollectionExtensions.g.cs",
-                SourceText.From(GenerateSource(registrations, decorators, hs, f, opts, hc, name), Encoding.UTF8));
+                SourceText.From(GenerateSource(registrations, decorators, hs, f, opts, hc, val, intc, name), Encoding.UTF8));
 
             ctx.AddSource(
                 "AutoWireRegistrationSummary.g.cs",
@@ -872,6 +956,67 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
         }
 
         return false;
+    }
+
+    // ── AW009 helper ──────────────────────────────────────────────────────────
+
+    private static void RegisterScopedInHostedServiceDiagnostics(
+        IncrementalGeneratorInitializationContext context)
+    {
+        var issues = context.SyntaxProvider
+            .ForAttributeWithMetadataName(
+                HostedServiceFqn,
+                predicate: static (node, _) => node is ClassDeclarationSyntax,
+                transform: static (ctx, _) =>
+                {
+                    if (ctx.TargetSymbol is not INamedTypeSymbol { IsAbstract: false } sym) return null;
+
+                    var compilation = ctx.SemanticModel.Compilation;
+                    var scopedAttributes = new HashSet<string> { "AutoWire.ScopedAttribute", "AutoWire.TryScopedAttribute" };
+
+                    // Build a quick set of Scoped-registered type FQNs from the compilation
+                    var scopedTypes = new HashSet<string>(StringComparer.Ordinal);
+                    foreach (var tree in compilation.SyntaxTrees)
+                    {
+                        var model = compilation.GetSemanticModel(tree);
+                        foreach (var node in tree.GetRoot().DescendantNodes().OfType<ClassDeclarationSyntax>())
+                        {
+                            if (model.GetDeclaredSymbol(node) is not INamedTypeSymbol typeSymbol) continue;
+                            foreach (var attr in typeSymbol.GetAttributes())
+                            {
+                                var attrFqn = attr.AttributeClass?.ToDisplayString();
+                                if (attrFqn is not null && scopedAttributes.Contains(attrFqn))
+                                {
+                                    // Register all service types this scoped class would expose
+                                    foreach (var iface in typeSymbol.AllInterfaces)
+                                        scopedTypes.Add(iface.ToDisplayString());
+                                    scopedTypes.Add(typeSymbol.ToDisplayString());
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    foreach (var ctor in sym.Constructors)
+                    {
+                        if (ctor.IsStatic || ctor.DeclaredAccessibility == Accessibility.Private) continue;
+                        foreach (var param in ctor.Parameters)
+                        {
+                            var paramFqn = param.Type.ToDisplayString();
+                            if (scopedTypes.Contains(paramFqn))
+                            {
+                                var loc = sym.Locations.Length > 0 ? sym.Locations[0] : Location.None;
+                                return new DiagnosticInfo("AW009", loc, new[] { sym.Name, param.Type.Name });
+                            }
+                        }
+                    }
+                    return null;
+                })
+            .Where(static d => d is not null)
+            .Select(static (d, _) => d!);
+
+        context.RegisterSourceOutput(issues, static (ctx, d) =>
+            ctx.ReportDiagnostic(d.Create(AW009ScopedInHostedService)));
     }
 
     private static bool TypeHasAutoWireAttribute(INamedTypeSymbol symbol, string attributeFqn)
@@ -1260,6 +1405,122 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             .Select(static (h, _) => h!);
     }
 
+    // ── Validator collection ───────────────────────────────────────────────────
+
+    private static IncrementalValuesProvider<ValidatorInfo> CollectValidators(
+        IncrementalGeneratorInitializationContext context)
+    {
+        return context.SyntaxProvider
+            .ForAttributeWithMetadataName(
+                ValidateFqn,
+                predicate: static (node, _) => node is ClassDeclarationSyntax,
+                transform: static (ctx, _) =>
+                {
+                    if (ctx.TargetSymbol is not INamedTypeSymbol classSymbol) return null;
+
+                    // Walk the inheritance chain to find AbstractValidator<T>
+                    var baseType = classSymbol.BaseType;
+                    while (baseType is not null)
+                    {
+                        var baseFqn = baseType.OriginalDefinition?.ToDisplayString();
+                        if (baseFqn == "FluentValidation.AbstractValidator<T>" ||
+                            (baseType.Name == "AbstractValidator" && baseType.IsGenericType && baseType.TypeArguments.Length == 1))
+                        {
+                            var validatedType = baseType.TypeArguments[0];
+                            return new ValidatorInfo(
+                                ToFullyQualified(classSymbol),
+                                ToFullyQualified(validatedType));
+                        }
+                        baseType = baseType.BaseType;
+                    }
+
+                    return null;
+                })
+            .Where(static v => v is not null)
+            .Select(static (v, _) => v!);
+    }
+
+    // ── Interceptor collection ─────────────────────────────────────────────────
+
+    private static IncrementalValuesProvider<InterceptorInfo> CollectInterceptors(
+        IncrementalGeneratorInitializationContext context)
+    {
+        return context.SyntaxProvider
+            .ForAttributeWithMetadataName(
+                InterceptorFqn,
+                predicate: static (node, _) => node is ClassDeclarationSyntax,
+                transform: static (ctx, _) => TransformAllInterceptors(ctx))
+            .SelectMany(static (arr, _) => arr);
+    }
+
+    private static ImmutableArray<InterceptorInfo> TransformAllInterceptors(
+        GeneratorAttributeSyntaxContext ctx)
+    {
+        if (ctx.TargetSymbol is not INamedTypeSymbol interceptorSymbol)
+            return ImmutableArray<InterceptorInfo>.Empty;
+
+        var builder = ImmutableArray.CreateBuilder<InterceptorInfo>(ctx.Attributes.Length);
+        foreach (var attr in ctx.Attributes)
+        {
+            if (attr.ConstructorArguments.Length == 0) continue;
+            if (attr.ConstructorArguments[0].Value is not ITypeSymbol serviceTypeSymbol) continue;
+            if (serviceTypeSymbol is not INamedTypeSymbol namedService) continue;
+
+            var lifetime = "Scoped";
+            foreach (var na in attr.NamedArguments)
+                if (na.Key == "Lifetime" && na.Value.Value is string l &&
+                    (l == "Scoped" || l == "Singleton" || l == "Transient"))
+                    lifetime = l;
+
+            var interceptorFqn = ToFullyQualified(interceptorSymbol);
+            var serviceFqn = ToFullyQualified(serviceTypeSymbol);
+
+            // Build a safe proxy class name: AutoWire_Proxy_IMyService_with_LoggingInterceptor
+            var interceptorSimple = interceptorSymbol.Name;
+            var serviceSimple = namedService.Name.TrimStart('I');
+            var proxyClassName = $"AutoWire_Proxy_{serviceSimple}_with_{interceptorSimple}";
+
+            // Collect all non-generic instance methods from the interface
+            var methods = ImmutableArray.CreateBuilder<MethodSignature>();
+            foreach (var member in namedService.GetMembers().OfType<IMethodSymbol>())
+            {
+                if (member.IsStatic || member.MethodKind != MethodKind.Ordinary) continue;
+                if (member.IsGenericMethod) continue; // skip generic methods for now
+
+                var returnFqn = member.ReturnType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+                var isVoid = member.ReturnsVoid;
+
+                var isTask = !isVoid &&
+                    (member.ReturnType.ToDisplayString() == "System.Threading.Tasks.Task" ||
+                     member.ReturnType.ToDisplayString() == "System.Threading.Tasks.ValueTask");
+                var isTaskOfT = !isVoid && !isTask &&
+                    member.ReturnType is INamedTypeSymbol rt && rt.IsGenericType &&
+                    (rt.OriginalDefinition.ToDisplayString() == "System.Threading.Tasks.Task<TResult>" ||
+                     rt.OriginalDefinition.ToDisplayString() == "System.Threading.Tasks.ValueTask<TResult>");
+
+                string? taskResultType = null;
+                if (isTaskOfT && member.ReturnType is INamedTypeSymbol rtGeneric)
+                    taskResultType = rtGeneric.TypeArguments[0].ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+
+                var parameters = ImmutableArray.CreateBuilder<(string, string)>(member.Parameters.Length);
+                var hasRefOrOut = false;
+                foreach (var p in member.Parameters)
+                {
+                    if (p.RefKind != RefKind.None) { hasRefOrOut = true; break; }
+                    parameters.Add((p.Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat), p.Name));
+                }
+                if (hasRefOrOut) continue; // skip ref/out for now
+
+                methods.Add(new MethodSignature(
+                    member.Name, returnFqn, parameters.ToImmutable(),
+                    isVoid, isTask, isTaskOfT, taskResultType));
+            }
+
+            builder.Add(new InterceptorInfo(interceptorFqn, serviceFqn, lifetime, proxyClassName, methods.ToImmutable()));
+        }
+        return builder.ToImmutable();
+    }
+
     private static IncrementalValuesProvider<RegistrationInfo> CollectRegistrations(
         IncrementalGeneratorInitializationContext context,
         string attributeFqn,
@@ -1441,6 +1702,8 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
         ImmutableArray<FactoryInfo> factories,
         ImmutableArray<OptionsInfo> options,
         ImmutableArray<HttpClientInfo> httpClients,
+        ImmutableArray<ValidatorInfo> validators,
+        ImmutableArray<InterceptorInfo> interceptors,
         string methodName)
     {
         var sb = new StringBuilder();
@@ -1616,8 +1879,31 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             }
         }
 
+        if (!validators.IsEmpty)
+        {
+            sb.AppendLine();
+            foreach (var v in validators.OrderBy(static v => v.ValidatorType))
+                sb.AppendLine($"        services.AddScoped<global::FluentValidation.IValidator<{v.ValidatedType}>, {v.ValidatorType}>();");
+        }
+
+        if (!interceptors.IsEmpty)
+        {
+            sb.AppendLine();
+            foreach (var intc in interceptors.OrderBy(static i => i.InterceptorType))
+            {
+                sb.AppendLine($"        services.Add{intc.Lifetime}<{intc.ServiceType}>(sp =>");
+                sb.AppendLine($"            new {intc.ProxyClassName}(");
+                sb.AppendLine($"                sp.GetRequiredService<{intc.InterceptorType}>()));");
+                sb.AppendLine($"        services.Add{intc.Lifetime}<{intc.InterceptorType}>();");
+            }
+        }
+
         sb.AppendLine("        return services;");
         sb.AppendLine("    }");
+
+        // ── Proxy classes ─────────────────────────────────────────────────────
+        foreach (var intc in interceptors)
+            EmitProxyClass(sb, intc);
 
         // ── Module methods ────────────────────────────────────────────────────
         var moduleGroups = new Dictionary<string, List<RegistrationInfo>>(StringComparer.Ordinal);
@@ -1803,6 +2089,65 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             sb.AppendLine($"            }}");
             sb.AppendLine($"        }}");
         }
+    }
+
+    // ── Proxy class emitter ───────────────────────────────────────────────────
+
+    private static void EmitProxyClass(StringBuilder sb, InterceptorInfo intc)
+    {
+        sb.AppendLine();
+        sb.AppendLine($"file sealed class {intc.ProxyClassName} : {intc.ServiceType}");
+        sb.AppendLine("{");
+        sb.AppendLine($"    private readonly {intc.InterceptorType} _interceptor;");
+        sb.AppendLine($"    public {intc.ProxyClassName}({intc.InterceptorType} interceptor)");
+        sb.AppendLine("    {");
+        sb.AppendLine("        _interceptor = interceptor;");
+        sb.AppendLine("    }");
+
+        foreach (var method in intc.Methods)
+        {
+            var paramDecl = string.Join(", ", method.Parameters.Select(static p => $"{p.Type} {p.Name}"));
+            var paramNames = string.Join(", ", method.Parameters.Select(static p => p.Name));
+            var retType = method.IsVoid ? "void" : method.ReturnType;
+            sb.AppendLine();
+            sb.AppendLine($"    public {retType} {method.Name}({paramDecl})");
+            sb.AppendLine("    {");
+            sb.AppendLine($"        var __inv = new global::AutoWire.AutoWireInvocation(\"{method.Name}\", new object?[] {{ {paramNames} }});");
+            if (method.IsVoid)
+            {
+                sb.AppendLine("        _interceptor.Intercept(__inv);");
+            }
+            else if (method.IsTask)
+            {
+                sb.AppendLine("        _interceptor.Intercept(__inv);");
+                sb.AppendLine($"        return __inv.Result is System.Threading.Tasks.Task t ? t : {method.ReturnType}.CompletedTask;");
+            }
+            else if (method.IsTaskOfT && method.TaskResultType is not null)
+            {
+                sb.AppendLine("        _interceptor.Intercept(__inv);");
+                sb.AppendLine($"        return __inv.Result is System.Threading.Tasks.Task<{method.TaskResultType}> t ? t : System.Threading.Tasks.Task.FromResult(({method.TaskResultType})__inv.Result!);");
+            }
+            else
+            {
+                sb.AppendLine("        _interceptor.Intercept(__inv);");
+                sb.AppendLine($"        return ({method.ReturnType})__inv.Result!;");
+            }
+            sb.AppendLine("    }");
+        }
+
+        sb.AppendLine("}");
+        sb.AppendLine();
+        sb.AppendLine($"file sealed class AutoWireInvocation : global::AutoWire.IAutoWireInvocation");
+        sb.AppendLine("{");
+        sb.AppendLine("    public string MethodName { get; }");
+        sb.AppendLine("    public object?[] Arguments { get; }");
+        sb.AppendLine("    public object? Result { get; set; }");
+        sb.AppendLine("    public AutoWireInvocation(string methodName, object?[] arguments)");
+        sb.AppendLine("    {");
+        sb.AppendLine("        MethodName = methodName;");
+        sb.AppendLine("        Arguments = arguments;");
+        sb.AppendLine("    }");
+        sb.AppendLine("}");
     }
 
     private static void EmitLine(StringBuilder sb, RegistrationInfo reg, string svc, string indent = "        ")

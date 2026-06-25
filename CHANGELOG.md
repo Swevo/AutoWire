@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.16.0] — 2026-06-26
+
+### Added
+- **AW009 diagnostic** — warns when a `[HostedService]`-decorated class injects a Scoped service directly.
+  Background services live for the application lifetime (singleton scope); injecting a scoped dependency causes a captive dependency bug.
+  Fix: inject `IServiceScopeFactory` and create a scope per execution cycle.
+- **`[Validate]` attribute** — register FluentValidation validators with a single attribute.
+  Decorate your `AbstractValidator<T>` subclass; AutoWire emits `services.AddScoped<IValidator<T>, MyValidator>()` automatically.
+  No direct FluentValidation package reference required in AutoWire itself — registration code is emitted as source.
+- **`[Interceptor]` attribute** — compile-time AOP proxy generation.
+  Apply `[Interceptor(typeof(IMyService))]` to a class that implements `IAutoWireInterceptor`; AutoWire generates a `file sealed` proxy class implementing every non-generic instance method of the interface, routing each call through `interceptor.Intercept(IAutoWireInvocation)`.
+  Supports `void`, `Task`, `Task<T>`, and value-returning methods. Generic methods and `ref`/`out` parameters are skipped.
+
+---
+
 ## [1.15.0] — 2026-06-25
 
 ### Added
