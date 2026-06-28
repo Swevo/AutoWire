@@ -21,6 +21,20 @@ AutoWire is **~19× faster than Scrutor** at registration time and allocates **6
 
 ---
 
+## AOT / Native AOT
+
+AutoWire is **fully compatible with .NET Native AOT**.
+
+Why? AutoWire does all registration work at **compile time**. It generates normal `IServiceCollection` calls into your build output, so there is **no reflection**, **no runtime assembly scanning**, and **no dynamic code generation** at startup.
+
+```bash
+dotnet publish -r linux-x64 -p:PublishAot=true
+```
+
+This is a major differentiator versus Scrutor and similar reflection-based registration libraries, which rely on runtime scanning and are therefore a poor fit for Native AOT. If you need compile-time DI registration that stays AOT-safe, AutoWire is designed for exactly that.
+
+---
+
 ## The problem
 
 Every .NET project accumulates this:
@@ -330,7 +344,7 @@ services.AddHostedService<global::DataSyncWorker>();
 
 ## Roslyn diagnostics
 
-AutoWire ships **eleven built-in diagnostics** that surface problems **as squiggles in the IDE** — no runtime surprises.
+AutoWire ships **thirteen built-in diagnostics** that surface problems **as squiggles in the IDE** — no runtime surprises.
 
 | ID | Severity | Condition |
 |---|---|---|
@@ -345,6 +359,8 @@ AutoWire ships **eleven built-in diagnostics** that surface problems **as squigg
 | AW009 | ⚠ Warning | `[HostedService]` injects a `[Scoped]` service — **captive dependency** in a long-lived background worker |
 | AW010 | ⚠ Warning | **Duplicate `[Interceptor]` targets** — two attributes on the same class target the same interface |
 | AW011 | ⚠ Warning | `[Interceptor]` target interface has **no interceptable methods** — proxy would be empty |
+| AW012 | ❌ Error | `[DecorateScoped]` / `[DecorateSingleton]` / `[DecorateTransient]` targets a service the decorator **does not implement** |
+| AW013 | ⚠ Warning | A registered service constructor depends on a type that is **not registered in the AutoWire graph** |
 
 ### AW001 example
 
@@ -421,6 +437,24 @@ public class DataSyncWorker : BackgroundService
         }
     }
 }
+```
+
+### AW013 example
+
+```csharp
+// ⚠ AW013: 'OrderService' constructor parameter 'IPaymentGateway' is not registered with AutoWire.
+[Scoped]
+public class OrderService
+{
+    public OrderService(IPaymentGateway gateway) { }
+}
+
+// ✅ Fix — either register it manually in Program.cs...
+builder.Services.AddScoped<IPaymentGateway, StripePaymentGateway>();
+
+// ...or make the implementation discoverable by AutoWire:
+[Scoped]
+public class StripePaymentGateway : IPaymentGateway { }
 ```
 
 ### AW010 example
@@ -763,6 +797,7 @@ services.AddScoped<IOrderService>(sp =>
 - `provider.GetRequiredService<OrderService>()` → `OrderService` directly (useful in tests) ✓
 - The decorator is the **same lifetime** as the `[DecorateScoped/Singleton/Transient]` attribute
 - **No reflection** — the inner type is resolved at compile time from AutoWire's own registration map
+- AW012 ensures the decorator actually implements the service it claims to wrap
 
 ### Multiple decorators
 
@@ -1190,7 +1225,7 @@ public static partial class ServiceCollectionExtensions
 | [Injectio](https://github.com/loresoft/Injectio) | Source generator | **None** | ✅ |
 | **AutoWire** | Source generator | **None** | ✅ |
 
-AutoWire differs from Scrutor in that registration happens **at compile time** — there is no assembly scanning, no reflection, and no startup cost. It also differs from Scrutor's convention-based scanning in that intent is expressed directly on the class, making it easy to understand what is registered without reading `Startup.cs`.
+AutoWire differs from Scrutor in that registration happens **at compile time** — there is no assembly scanning, no reflection, and no startup cost. That also makes AutoWire **Native AOT-friendly**, whereas Scrutor-style runtime scanning is not. It also differs from Scrutor's convention-based scanning in that intent is expressed directly on the class, making it easy to understand what is registered without reading `Startup.cs`.
 
 ---
 
@@ -1282,6 +1317,9 @@ Yes — use `[HostedService]` on any class implementing `IHostedService` or exte
 **Q: What if I accidentally specify the wrong service type?**
 AW003 catches it at compile time with a build error. `[Scoped(typeof(IFoo))]` on a class that doesn't implement `IFoo` will fail the build with a clear message rather than exploding at runtime.
 
+**Q: What if my decorator doesn't implement the service it's decorating?**
+AW012 catches that at compile time. `[DecorateScoped(typeof(IFoo))]` on a class that does not implement `IFoo` is a build error.
+
 **Q: What if I have two services implementing the same interface?**
 AutoWire registers each independently and emits an AW002 info diagnostic. Use `DuplicateStrategy.Replace` to make the winner explicit, `DuplicateStrategy.Skip` to keep the first, or keyed services to disambiguate.
 
@@ -1296,6 +1334,9 @@ Yes — AutoWire auto-discovers compatible open generic interfaces and emits `se
 
 **Q: Does it support the decorator pattern?**
 Yes — use `[DecorateScoped(typeof(IService))]`, `[DecorateSingleton]`, or `[DecorateTransient]` on a class to wrap an existing registration. AutoWire generates compile-time code that self-registers the inner type and wires the decorator. No Scrutor required.
+
+**Q: What if a constructor dependency is registered manually, not by AutoWire?**
+AW013 is intentionally a **warning**, not an error. It only means AutoWire could not see that dependency in its generated registration graph. If you register the dependency manually in `Program.cs` or another extension method, you're fine; otherwise add an AutoWire attribute to the implementation.
 
 **Q: I'm writing a NuGet library and don't want to override my consumer's registrations. What should I use?**
 Use `[TryScoped]`, `[TrySingleton]`, or `[TryTransient]`. These generate `TryAddScoped/Singleton/Transient` calls — the registration is silently skipped if the service type is already registered by the consumer.
