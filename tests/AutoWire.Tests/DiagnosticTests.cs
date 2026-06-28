@@ -653,6 +653,82 @@ public class DiagnosticTests
         Assert.DoesNotContain(diagnostics, d => d.Id == "AW011");
     }
 
+    // ── AW012: decorator service type mismatch ────────────────────────────────
+
+    [Fact]
+    public void AW012_DecoratorNotImplementingServiceType_EmitsError()
+    {
+        var source = """
+            public interface IFoo { }
+            public interface IBar { }
+            [AutoWire.DecorateScoped(typeof(IFoo))]
+            public class FooDecorator : IBar
+            {
+                public FooDecorator(IFoo inner) { }
+            }
+            """;
+
+        var diagnostics = RunGenerator(source);
+        Assert.Contains(diagnostics, d => d.Id == "AW012");
+        Assert.DoesNotContain(diagnostics, d => d.Id == "AW003");
+    }
+
+    // ── AW013: missing registration detection ─────────────────────────────────
+
+    [Fact]
+    public void AW013_UnregisteredConstructorDependency_EmitsWarning()
+    {
+        var source = """
+            public interface IPaymentGateway { }
+            [AutoWire.Scoped]
+            public class OrderService
+            {
+                public OrderService(IPaymentGateway gateway) { }
+            }
+            """;
+
+        var diagnostics = RunGenerator(source);
+        Assert.Contains(diagnostics, d => d.Id == "AW013");
+    }
+
+    [Fact]
+    public void AW013_RegisteredConstructorDependency_NoWarning()
+    {
+        var source = """
+            public interface IPaymentGateway { }
+            [AutoWire.Scoped]
+            public class PaymentGateway : IPaymentGateway { }
+            [AutoWire.Scoped]
+            public class OrderService
+            {
+                public OrderService(IPaymentGateway gateway) { }
+            }
+            """;
+
+        var diagnostics = RunGenerator(source);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "AW013");
+    }
+
+    [Fact]
+    public void AW013_FrameworkProvidedDependency_NoWarning()
+    {
+        var source = """
+            [AutoWire.Scoped]
+            public class OrderService
+            {
+                public OrderService(Microsoft.Extensions.Logging.ILogger<OrderService> logger,
+                    Microsoft.Extensions.Configuration.IConfiguration configuration,
+                    Microsoft.Extensions.DependencyInjection.IServiceScopeFactory scopeFactory,
+                    Microsoft.Extensions.Options.IOptions<OrderOptions> options) { }
+            }
+
+            public class OrderOptions { }
+            """;
+
+        var diagnostics = RunGenerator(source);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "AW013");
+    }
+
     // ── Multi-interface attribute ─────────────────────────────────────────────
 
     [Fact]
