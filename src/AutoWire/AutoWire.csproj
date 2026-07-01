@@ -17,7 +17,7 @@
     <Authors>Justin Bannister</Authors>
     <Copyright>Copyright (c) 2025 Justin Bannister</Copyright>
     <Description>Compile-time dependency injection auto-registration for .NET using Roslyn source generators. Add [Scoped], [Singleton], or [Transient] to your classes — AutoWire generates IServiceCollection registration code at build time. Zero runtime overhead, no reflection, no startup cost. Supports keyed services (.NET 8+) and works with ASP.NET Core, Worker Services, MAUI, and any Microsoft.Extensions.DependencyInjection project.</Description>
-    <PackageTags>dependency-injection;source-generator;di;iservicecollection;auto-register;roslyn;dotnet;aspnetcore;csharp;nuget;scoped;singleton;transient;compile-time;zero-reflection;keyed-services;worker-service;maui;di-registration;polly</PackageTags>
+    <PackageTags>dependency-injection;source-generator;di;iservicecollection;auto-register;roslyn;dotnet;aspnetcore;csharp;nuget;scoped;singleton;transient;compile-time;zero-reflection;keyed-services;worker-service;maui;di-registration;scrutor-alternative;polly</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <RepositoryUrl>https://github.com/Swevo/AutoWire</RepositoryUrl>
