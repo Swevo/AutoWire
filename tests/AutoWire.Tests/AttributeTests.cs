@@ -74,4 +74,11 @@ public class AttributeTests
         var attr = new OptionsAttribute("MySection");
         Assert.Equal("MySection", attr.Section);
     }
+
+    [Fact]
+    public void ScanAssemblyAttribute_WithMarkerType_SetsProperty()
+    {
+        var attr = new ScanAssemblyAttribute(typeof(OrderService));
+        Assert.Equal(typeof(OrderService), attr.MarkerType);
+    }
 }

@@ -31,6 +31,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
     private const string HttpClientFqn        = "AutoWire.HttpClientAttribute";
     private const string ValidateFqn          = "AutoWire.ValidateAttribute";
     private const string InterceptorFqn       = "AutoWire.InterceptorAttribute";
+    private const string ScanAssemblyFqn      = "AutoWire.ScanAssemblyAttribute";
 
     // ── Diagnostics ────────────────────────────────────────────────────────────
     private static readonly DiagnosticDescriptor AW001AbstractClass = new(
@@ -149,6 +150,24 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
         defaultSeverity: DiagnosticSeverity.Warning,
         isEnabledByDefault: true,
         description: "Constructor dependencies that are not part of AutoWire's generated registration graph may fail at runtime unless they are registered manually.");
+
+    private static readonly DiagnosticDescriptor AW014InvalidScanAssembly = new(
+        id: "AW014",
+        title: "[ScanAssembly] marker must come from a referenced assembly",
+        messageFormat: "[ScanAssembly] marker type '{0}' does not resolve to a referenced assembly. Use a public type from a referenced project or package.",
+        category: "AutoWire",
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true,
+        description: "Pass a public marker type from a referenced assembly so AutoWire can inspect that assembly's metadata.");
+
+    private static readonly DiagnosticDescriptor AW015EmptyScanAssembly = new(
+        id: "AW015",
+        title: "[ScanAssembly] found no attributed services",
+        messageFormat: "[ScanAssembly] found no AutoWire-attributed services in assembly '{0}'",
+        category: "AutoWire",
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "The referenced assembly resolved successfully, but AutoWire did not find any public services decorated with registration attributes in it.");
 
     // ── Attribute source ───────────────────────────────────────────────────────
     private const string AttributeSource = """
@@ -424,6 +443,20 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             }
 
             /// <summary>
+            /// Scans the referenced assembly that contains <paramref name="markerType"/> and includes any
+            /// public classes decorated with AutoWire registration attributes.
+            /// Apply at the assembly level and repeat for each referenced assembly you want to include.
+            /// </summary>
+            /// <example>[assembly: AutoWire.ScanAssembly(typeof(MyApp.Core.MarkerType))]</example>
+            [AttributeUsage(AttributeTargets.Assembly, AllowMultiple = true)]
+            public sealed class ScanAssemblyAttribute : Attribute
+            {
+                /// <summary>A public marker type from the referenced assembly to scan.</summary>
+                public Type MarkerType { get; }
+                public ScanAssemblyAttribute(Type markerType) { MarkerType = markerType; }
+            }
+
+            /// <summary>
             /// Scans the specified namespace and registers all non-abstract, non-excluded classes
             /// that do not already carry an explicit AutoWire registration attribute.
             /// Apply at the assembly level — can be used multiple times for different namespaces or lifetimes.
@@ -682,10 +715,13 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
 
         // ── Convention scan pipeline ───────────────────────────────────────────
         var scannedRegs = CollectScanRegistrations(context);
+        var referencedAssemblyRegs = CollectReferencedAssemblyRegistrations(context);
 
         // ── AW004: captive dependency detection ───────────────────────────────
         RegisterCaptiveDependencyDiagnostics(context);
         RegisterAmbiguousScanDiagnostics(context);
+        RegisterInvalidScanAssemblyDiagnostics(context);
+        RegisterEmptyScanAssemblyDiagnostics(context);
 
         // ── AW009: Scoped in HostedService diagnostics ────────────────────────
         RegisterScopedInHostedServiceDiagnostics(context);
@@ -717,6 +753,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             .Combine(decoTransient.Collect())
             .Combine(hostedServices.Collect())
             .Combine(scannedRegs.Collect())
+            .Combine(referencedAssemblyRegs.Collect())
             .Combine(factories.Collect())
             .Combine(optionsRegs.Collect())
             .Combine(httpClients.Collect())
@@ -726,8 +763,8 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
 
         context.RegisterSourceOutput(all, static (ctx, combined) =>
         {
-            var ((((((((((((((((s, si), t), ts), tsi), tt), ds), dsi), dt), hs), sr), f), opts), hc), val), intc), name) = combined;
-            var registrations = s.AddRange(si).AddRange(t).AddRange(ts).AddRange(tsi).AddRange(tt).AddRange(sr);
+            var (((((((((((((((((s, si), t), ts), tsi), tt), ds), dsi), dt), hs), sr), rsr), f), opts), hc), val), intc), name) = combined;
+            var registrations = s.AddRange(si).AddRange(t).AddRange(ts).AddRange(tsi).AddRange(tt).AddRange(sr).AddRange(rsr);
             var decorators    = ds.AddRange(dsi).AddRange(dt);
             if (registrations.IsEmpty && decorators.IsEmpty && hs.IsEmpty && f.IsEmpty && opts.IsEmpty && hc.IsEmpty && val.IsEmpty && intc.IsEmpty) return;
 
@@ -974,6 +1011,59 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
 
             var loc = type.Locations.Length > 0 ? type.Locations[0] : Location.None;
             results.Add(new DiagnosticInfo("AW005", loc, new[] { type.Name }));
+        }
+
+        return results.ToImmutable();
+    }
+
+    private static void RegisterInvalidScanAssemblyDiagnostics(
+        IncrementalGeneratorInitializationContext context)
+    {
+        var invalid = context.CompilationProvider
+            .Select(static (compilation, _) => FindInvalidScanAssemblyDiagnostics(compilation))
+            .SelectMany(static (arr, _) => arr);
+
+        context.RegisterSourceOutput(invalid, static (ctx, d) =>
+            ctx.ReportDiagnostic(d.Create(AW014InvalidScanAssembly)));
+    }
+
+    private static ImmutableArray<DiagnosticInfo> FindInvalidScanAssemblyDiagnostics(Compilation compilation)
+    {
+        var results = ImmutableArray.CreateBuilder<DiagnosticInfo>();
+        foreach (var config in GetScanAssemblyConfigs(compilation))
+        {
+            if (config.IsValid) continue;
+            results.Add(new DiagnosticInfo("AW014", config.Location, new[] { config.MarkerTypeDisplay }));
+        }
+
+        return results.ToImmutable();
+    }
+
+    private static void RegisterEmptyScanAssemblyDiagnostics(
+        IncrementalGeneratorInitializationContext context)
+    {
+        var empty = context.CompilationProvider
+            .Select(static (compilation, _) => FindEmptyScanAssemblyDiagnostics(compilation))
+            .SelectMany(static (arr, _) => arr);
+
+        context.RegisterSourceOutput(empty, static (ctx, d) =>
+            ctx.ReportDiagnostic(d.Create(AW015EmptyScanAssembly)));
+    }
+
+    private static ImmutableArray<DiagnosticInfo> FindEmptyScanAssemblyDiagnostics(Compilation compilation)
+    {
+        var results = ImmutableArray.CreateBuilder<DiagnosticInfo>();
+        foreach (var config in GetScanAssemblyConfigs(compilation))
+        {
+            if (!config.IsValid || config.AssemblySymbol is null) continue;
+
+            var foundAny = GetAllNamedTypesInNamespace(config.AssemblySymbol.GlobalNamespace)
+                .Where(static type => IsPubliclyVisible(type) && !type.IsAbstract)
+                .OrderBy(static type => GetTypeSortKey(type), StringComparer.Ordinal)
+                .Any(HasScannableRegistrationAttributes);
+
+            if (!foundAny)
+                results.Add(new DiagnosticInfo("AW015", config.Location, new[] { config.AssemblySymbol.Name }));
         }
 
         return results.ToImmutable();
@@ -1643,6 +1733,62 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
 
     // ── Convention scan collection ─────────────────────────────────────────────
 
+    private sealed class ScanAssemblyConfig
+    {
+        public ScanAssemblyConfig(
+            IAssemblySymbol? assemblySymbol,
+            Location location,
+            string markerTypeDisplay,
+            bool isValid)
+        {
+            AssemblySymbol = assemblySymbol;
+            Location = location;
+            MarkerTypeDisplay = markerTypeDisplay;
+            IsValid = isValid;
+        }
+
+        public IAssemblySymbol? AssemblySymbol { get; }
+        public Location Location { get; }
+        public string MarkerTypeDisplay { get; }
+        public bool IsValid { get; }
+    }
+
+    private static IncrementalValuesProvider<RegistrationInfo> CollectReferencedAssemblyRegistrations(
+        IncrementalGeneratorInitializationContext context)
+    {
+        return context.CompilationProvider
+            .Select(static (compilation, _) => FindReferencedAssemblyRegistrations(compilation))
+            .SelectMany(static (arr, _) => arr);
+    }
+
+    private static ImmutableArray<RegistrationInfo> FindReferencedAssemblyRegistrations(Compilation compilation)
+    {
+        var results = ImmutableArray.CreateBuilder<RegistrationInfo>();
+        var seenRegistrations = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var config in GetScanAssemblyConfigs(compilation))
+        {
+            if (!config.IsValid || config.AssemblySymbol is null) continue;
+
+            var registrations = GetAllNamedTypesInNamespace(config.AssemblySymbol.GlobalNamespace)
+                .Where(static type => IsPubliclyVisible(type) && !type.IsAbstract)
+                .OrderBy(static type => GetTypeSortKey(type), StringComparer.Ordinal)
+                .SelectMany(static type => GetRegistrationInfosFromType(type))
+                .OrderBy(static reg => reg.ImplementationType, StringComparer.Ordinal)
+                .ThenBy(static reg => reg.Lifetime, StringComparer.Ordinal)
+                .ThenBy(static reg => string.Join("|", reg.ServiceTypes), StringComparer.Ordinal);
+
+            foreach (var registration in registrations)
+            {
+                var key = $"{registration.ImplementationType}|{registration.Lifetime}|{registration.KeyExpression}|{registration.IsOpenGeneric}|{registration.DuplicateStrategy}|{registration.IncludeSelf}|{registration.Profile}|{registration.Condition}|{registration.IncludeLazy}|{registration.Module}|{string.Join("|", registration.ServiceTypes)}";
+                if (seenRegistrations.Add(key))
+                    results.Add(registration);
+            }
+        }
+
+        return results.ToImmutable();
+    }
+
     private static IncrementalValuesProvider<RegistrationInfo> CollectScanRegistrations(
         IncrementalGeneratorInitializationContext context)
     {
@@ -1698,7 +1844,8 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             var asmSymbol = kvp.Key;
             var configs = kvp.Value;
             var isCurrentAssembly = SymbolEqualityComparer.Default.Equals(asmSymbol, compilation.Assembly);
-            foreach (var type in GetAllNamedTypesInNamespace(asmSymbol.GlobalNamespace))
+            foreach (var type in GetAllNamedTypesInNamespace(asmSymbol.GlobalNamespace)
+                         .OrderBy(static type => GetTypeSortKey(type), StringComparer.Ordinal))
             {
                 if (type.IsAbstract) continue;
                 if (type.IsGenericType) continue;
@@ -1756,6 +1903,100 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
 
         return results.ToImmutable();
     }
+
+    private static ImmutableArray<ScanAssemblyConfig> GetScanAssemblyConfigs(Compilation compilation)
+    {
+        var referencedAssemblies = compilation.SourceModule.ReferencedAssemblySymbols;
+
+        var configs = ImmutableArray.CreateBuilder<ScanAssemblyConfig>();
+        foreach (var attr in compilation.Assembly.GetAttributes())
+        {
+            if (attr.AttributeClass?.ToDisplayString() != ScanAssemblyFqn) continue;
+
+            var location = attr.ApplicationSyntaxReference?.GetSyntax().GetLocation() ?? Location.None;
+            var markerDisplay = "<unresolved>";
+            var isValid = false;
+            IAssemblySymbol? targetAssembly = null;
+
+            if (attr.ConstructorArguments.Length > 0 &&
+                attr.ConstructorArguments[0].Value is ITypeSymbol markerType &&
+                markerType.TypeKind != TypeKind.Error &&
+                markerType.ContainingAssembly is IAssemblySymbol markerAssembly)
+            {
+                markerDisplay = markerType.ToDisplayString();
+                foreach (var referencedAssembly in referencedAssemblies)
+                {
+                    if (!Equals(referencedAssembly.Identity, markerAssembly.Identity)) continue;
+                    targetAssembly = referencedAssembly;
+                    isValid = true;
+                    break;
+                }
+            }
+            else if (attr.ConstructorArguments.Length > 0 &&
+                     attr.ConstructorArguments[0].Value is ITypeSymbol unresolvedMarkerType)
+            {
+                markerDisplay = unresolvedMarkerType.ToDisplayString();
+            }
+
+            configs.Add(new ScanAssemblyConfig(targetAssembly, location, markerDisplay, isValid));
+        }
+
+        return configs.ToImmutable();
+    }
+
+    private static IEnumerable<RegistrationInfo> GetRegistrationInfosFromType(INamedTypeSymbol type)
+    {
+        foreach (var attr in type.GetAttributes())
+        {
+            if (!TryGetRegistrationAttributeInfo(attr, out var lifetime, out var duplicateStrategy)) continue;
+
+            var registration = TransformSingle(type, attr, lifetime, duplicateStrategy);
+            if (registration is not null)
+                yield return registration;
+        }
+    }
+
+    private static bool TryGetRegistrationAttributeInfo(
+        AttributeData attr,
+        out string lifetime,
+        out DuplicateStrategy duplicateStrategy)
+    {
+        lifetime = string.Empty;
+        duplicateStrategy = DuplicateStrategy.Add;
+
+        switch (attr.AttributeClass?.ToDisplayString())
+        {
+            case ScopedFqn:
+                lifetime = "Scoped";
+                duplicateStrategy = DuplicateStrategy.Add;
+                return true;
+            case SingletonFqn:
+                lifetime = "Singleton";
+                duplicateStrategy = DuplicateStrategy.Add;
+                return true;
+            case TransientFqn:
+                lifetime = "Transient";
+                duplicateStrategy = DuplicateStrategy.Add;
+                return true;
+            case TryScopedFqn:
+                lifetime = "Scoped";
+                duplicateStrategy = DuplicateStrategy.Skip;
+                return true;
+            case TrySingletonFqn:
+                lifetime = "Singleton";
+                duplicateStrategy = DuplicateStrategy.Skip;
+                return true;
+            case TryTransientFqn:
+                lifetime = "Transient";
+                duplicateStrategy = DuplicateStrategy.Skip;
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private static bool HasScannableRegistrationAttributes(INamedTypeSymbol type) =>
+        type.GetAttributes().Any(static attr => TryGetRegistrationAttributeInfo(attr, out _, out _));
 
     private static bool HasAnyRegistrationAttribute(INamedTypeSymbol type)
     {
@@ -2868,6 +3109,18 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
 
     private static bool IsSystemNamespace(string ns) =>
         ns == "System" || ns.StartsWith("System.", StringComparison.Ordinal);
+
+    private static bool IsPubliclyVisible(INamedTypeSymbol type)
+    {
+        for (ISymbol? current = type; current is INamedTypeSymbol named; current = named.ContainingType)
+            if (named.DeclaredAccessibility != Accessibility.Public)
+                return false;
+
+        return true;
+    }
+
+    private static string GetTypeSortKey(INamedTypeSymbol type) =>
+        type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
 
     private static string ToFullyQualified(ITypeSymbol symbol) =>
         symbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);

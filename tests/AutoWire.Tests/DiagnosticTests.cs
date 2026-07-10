@@ -779,19 +779,148 @@ public class DiagnosticTests
         Assert.Contains("CreateClient(\"MyClient\")", code);
     }
 
+    [Fact]
+    public void ScanAssembly_RegistersAttributedServiceFromReferencedAssembly()
+    {
+        var libraryReference = CreateReferencedAssembly(
+            "ExternalLibrary",
+            """
+            namespace External.Services
+            {
+                public interface IExternalService { }
+
+                [AutoWire.Scoped]
+                public class ExternalService : IExternalService { }
+
+                public sealed class Marker { }
+            }
+            """);
+
+        var consumerSource = """
+            [assembly: AutoWire.ScanAssembly(typeof(External.Services.Marker))]
+            """;
+
+        var (_, sources) = RunGeneratorWithSources(consumerSource, libraryReference);
+        var code = sources.First(s => s.HintName.Contains("ServiceCollectionExtensions")).SourceText.ToString();
+        Assert.Contains("services.AddScoped<global::External.Services.IExternalService, global::External.Services.ExternalService>();", code);
+    }
+
+    [Fact]
+    public void ScanAssembly_MultipleAssemblies_RegistersServicesFromEachReferencedAssembly()
+    {
+        var firstLibrary = CreateReferencedAssembly(
+            "FirstLibrary",
+            """
+            namespace First.Services
+            {
+                public interface IFirstService { }
+
+                [AutoWire.Singleton]
+                public class FirstService : IFirstService { }
+
+                public sealed class Marker { }
+            }
+            """);
+
+        var secondLibrary = CreateReferencedAssembly(
+            "SecondLibrary",
+            """
+            namespace Second.Services
+            {
+                public interface ISecondService { }
+
+                [AutoWire.Transient]
+                public class SecondService : ISecondService { }
+
+                public sealed class Marker { }
+            }
+            """);
+
+        var consumerSource = """
+            [assembly: AutoWire.ScanAssembly(typeof(First.Services.Marker))]
+            [assembly: AutoWire.ScanAssembly(typeof(Second.Services.Marker))]
+            """;
+
+        var (_, sources) = RunGeneratorWithSources(consumerSource, firstLibrary, secondLibrary);
+        var code = sources.First(s => s.HintName.Contains("ServiceCollectionExtensions")).SourceText.ToString();
+        Assert.Contains("services.AddSingleton<global::First.Services.IFirstService, global::First.Services.FirstService>();", code);
+        Assert.Contains("services.AddTransient<global::Second.Services.ISecondService, global::Second.Services.SecondService>();", code);
+    }
+
+    [Fact]
+    public void AW014_ScanAssemblyMarkerFromCurrentAssembly_EmitsError()
+    {
+        var source = """
+            [assembly: AutoWire.ScanAssembly(typeof(LocalMarker))]
+
+            public sealed class LocalMarker { }
+            """;
+
+        var diagnostics = RunGenerator(source);
+        Assert.Contains(diagnostics, d => d.Id == "AW014");
+    }
+
+    [Fact]
+    public void AW015_ScanAssemblyWithNoAttributedServices_EmitsWarning()
+    {
+        var libraryReference = CreateReferencedAssembly(
+            "EmptyLibrary",
+            """
+            namespace Empty.Services
+            {
+                public sealed class Marker { }
+                public class PlainService { }
+            }
+            """);
+
+        var source = """
+            [assembly: AutoWire.ScanAssembly(typeof(Empty.Services.Marker))]
+            """;
+
+        var diagnostics = RunGenerator(source, libraryReference);
+        Assert.Contains(diagnostics, d => d.Id == "AW015");
+    }
+
+    [Fact]
+    public void ScanAssembly_NotConfigured_DoesNotEmitAssemblyScanDiagnostics()
+    {
+        var source = """
+            public interface ILocalService { }
+
+            [AutoWire.Scoped]
+            public class LocalService : ILocalService { }
+            """;
+
+        var diagnostics = RunGenerator(source);
+        Assert.DoesNotContain(diagnostics, d => d.Id is "AW014" or "AW015");
+    }
+
     private static IReadOnlyList<Diagnostic> RunGenerator(string source)
     {
         var (diagnostics, _) = RunGeneratorWithSources(source);
         return diagnostics;
     }
 
+    private static IReadOnlyList<Diagnostic> RunGenerator(string source, params MetadataReference[] additionalReferences)
+    {
+        var (diagnostics, _) = RunGeneratorWithSources(source, additionalReferences);
+        return diagnostics;
+    }
+
     private static (IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyList<GeneratedSourceResult> Sources) RunGeneratorWithSources(string source)
+        => RunGeneratorWithSources(source, Array.Empty<MetadataReference>());
+
+    private static (IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyList<GeneratedSourceResult> Sources) RunGeneratorWithSources(
+        string source,
+        params MetadataReference[] additionalReferences)
     {
         var references = ((string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES"))
             ?.Split(Path.PathSeparator)
             .Select(path => (MetadataReference)MetadataReference.CreateFromFile(path))
             .ToList()
             ?? new List<MetadataReference>();
+
+        references.AddRange(additionalReferences);
 
         var compilation = CSharpCompilation.Create(
             assemblyName: "DiagnosticTestAssembly",
@@ -808,4 +937,111 @@ public class DiagnosticTests
         var sources = result.Results.SelectMany(r => r.GeneratedSources).ToList();
         return (result.Diagnostics, sources);
     }
+
+    private static MetadataReference CreateReferencedAssembly(string assemblyName, string source)
+    {
+        var references = ((string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES"))
+            ?.Split(Path.PathSeparator)
+            .Select(path => (MetadataReference)MetadataReference.CreateFromFile(path))
+            .ToList()
+            ?? new List<MetadataReference>();
+
+        var compilation = CSharpCompilation.Create(
+            assemblyName: assemblyName,
+            syntaxTrees:
+            [
+                CSharpSyntaxTree.ParseText(AutoWireAttributeStubSource),
+                CSharpSyntaxTree.ParseText(source)
+            ],
+            references: references,
+            options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+        using var stream = new MemoryStream();
+        var emitResult = compilation.Emit(stream);
+        Assert.True(emitResult.Success, string.Join(Environment.NewLine, emitResult.Diagnostics));
+        return MetadataReference.CreateFromImage(stream.ToArray());
+    }
+
+    private const string AutoWireAttributeStubSource = """
+        namespace AutoWire
+        {
+            [System.AttributeUsage(System.AttributeTargets.Class, AllowMultiple = true, Inherited = false)]
+            public sealed class ScopedAttribute : System.Attribute
+            {
+                public ScopedAttribute() { }
+                public ScopedAttribute(System.Type serviceType) { }
+                public ScopedAttribute(System.Type serviceType1, System.Type serviceType2, params System.Type[] additionalTypes) { }
+                public object? Key { get; set; }
+                public bool IncludeSelf { get; set; }
+                public string? Profile { get; set; }
+                public string? Condition { get; set; }
+                public bool IncludeLazy { get; set; }
+            }
+
+            [System.AttributeUsage(System.AttributeTargets.Class, AllowMultiple = true, Inherited = false)]
+            public sealed class SingletonAttribute : System.Attribute
+            {
+                public SingletonAttribute() { }
+                public SingletonAttribute(System.Type serviceType) { }
+                public SingletonAttribute(System.Type serviceType1, System.Type serviceType2, params System.Type[] additionalTypes) { }
+                public object? Key { get; set; }
+                public bool IncludeSelf { get; set; }
+                public string? Profile { get; set; }
+                public string? Condition { get; set; }
+                public bool IncludeLazy { get; set; }
+            }
+
+            [System.AttributeUsage(System.AttributeTargets.Class, AllowMultiple = true, Inherited = false)]
+            public sealed class TransientAttribute : System.Attribute
+            {
+                public TransientAttribute() { }
+                public TransientAttribute(System.Type serviceType) { }
+                public TransientAttribute(System.Type serviceType1, System.Type serviceType2, params System.Type[] additionalTypes) { }
+                public object? Key { get; set; }
+                public bool IncludeSelf { get; set; }
+                public string? Profile { get; set; }
+                public string? Condition { get; set; }
+                public bool IncludeLazy { get; set; }
+            }
+
+            [System.AttributeUsage(System.AttributeTargets.Class, AllowMultiple = true, Inherited = false)]
+            public sealed class TryScopedAttribute : System.Attribute
+            {
+                public TryScopedAttribute() { }
+                public TryScopedAttribute(System.Type serviceType) { }
+                public TryScopedAttribute(System.Type serviceType1, System.Type serviceType2, params System.Type[] additionalTypes) { }
+                public object? Key { get; set; }
+                public bool IncludeSelf { get; set; }
+                public string? Profile { get; set; }
+                public string? Condition { get; set; }
+                public bool IncludeLazy { get; set; }
+            }
+
+            [System.AttributeUsage(System.AttributeTargets.Class, AllowMultiple = true, Inherited = false)]
+            public sealed class TrySingletonAttribute : System.Attribute
+            {
+                public TrySingletonAttribute() { }
+                public TrySingletonAttribute(System.Type serviceType) { }
+                public TrySingletonAttribute(System.Type serviceType1, System.Type serviceType2, params System.Type[] additionalTypes) { }
+                public object? Key { get; set; }
+                public bool IncludeSelf { get; set; }
+                public string? Profile { get; set; }
+                public string? Condition { get; set; }
+                public bool IncludeLazy { get; set; }
+            }
+
+            [System.AttributeUsage(System.AttributeTargets.Class, AllowMultiple = true, Inherited = false)]
+            public sealed class TryTransientAttribute : System.Attribute
+            {
+                public TryTransientAttribute() { }
+                public TryTransientAttribute(System.Type serviceType) { }
+                public TryTransientAttribute(System.Type serviceType1, System.Type serviceType2, params System.Type[] additionalTypes) { }
+                public object? Key { get; set; }
+                public bool IncludeSelf { get; set; }
+                public string? Profile { get; set; }
+                public string? Condition { get; set; }
+                public bool IncludeLazy { get; set; }
+            }
+        }
+        """;
 }

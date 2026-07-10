@@ -344,7 +344,7 @@ services.AddHostedService<global::DataSyncWorker>();
 
 ## Roslyn diagnostics
 
-AutoWire ships **thirteen built-in diagnostics** that surface problems **as squiggles in the IDE** — no runtime surprises.
+AutoWire ships **fifteen built-in diagnostics** that surface problems **as squiggles in the IDE** — no runtime surprises.
 
 | ID | Severity | Condition |
 |---|---|---|
@@ -361,6 +361,8 @@ AutoWire ships **thirteen built-in diagnostics** that surface problems **as squi
 | AW011 | ⚠ Warning | `[Interceptor]` target interface has **no interceptable methods** — proxy would be empty |
 | AW012 | ❌ Error | `[DecorateScoped]` / `[DecorateSingleton]` / `[DecorateTransient]` targets a service the decorator **does not implement** |
 | AW013 | ⚠ Warning | A registered service constructor depends on a type that is **not registered in the AutoWire graph** |
+| AW014 | ❌ Error | `[ScanAssembly]` marker type does **not come from a referenced assembly** |
+| AW015 | ⚠ Warning | `[ScanAssembly]` resolved the assembly, but found **no AutoWire-attributed public services** in it |
 
 ### AW001 example
 
@@ -1141,9 +1143,38 @@ public static IServiceCollection AddPaymentsModule(this IServiceCollection servi
 
 ---
 
-## Multi-assembly scanning
+## Scanning other assemblies
 
-`[AutoWireScan]` can scan a **different assembly** by pointing its `AssemblyOf` property at any public type from that assembly:
+Use `[ScanAssembly]` when your composition-root project needs to include services decorated in a **different referenced assembly**:
+
+```csharp
+using AutoWire;
+
+[assembly: ScanAssembly(typeof(MyApp.Core.MarkerType))]
+[assembly: ScanAssembly(typeof(MyApp.Infrastructure.MarkerType))]
+```
+
+AutoWire inspects the referenced assemblies' metadata at compile time and includes any `public` classes decorated with:
+
+- `[Scoped]`
+- `[Singleton]`
+- `[Transient]`
+- `[TryScoped]`
+- `[TrySingleton]`
+- `[TryTransient]`
+
+This is ideal for layered solutions where the startup project wants to register services declared in another project without falling back to Scrutor runtime scanning.
+
+### Diagnostics
+
+- **AW014** — marker type is not from a referenced assembly (for example, you passed a type from the current project)
+- **AW015** — the target assembly resolved, but AutoWire found no attributed public services in it
+
+---
+
+## Convention scanning across assemblies
+
+`[AutoWireScan]` can still scan a **different assembly** by pointing its `AssemblyOf` property at any public type from that assembly:
 
 ```csharp
 // Scan the "External.Services" namespace in the assembly that contains MarkerType
