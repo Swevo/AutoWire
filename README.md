@@ -1510,6 +1510,7 @@ I'm the author of AutoWire, **[AutoMap.Generator](https://github.com/Swevo/AutoM
 | [**AutoHttpClient.Generator**](https://github.com/Swevo/AutoHttpClient.Generator) | Compile-time typed HTTP client — `[HttpClient]` on an interface generates a strongly-typed client. AOT-safe Refit alternative. |
 | [**AutoGuard**](https://github.com/Swevo/AutoGuard) | Compile-time guard clauses — `[AutoGuard]` + `[NotNull]`/`[InRange]`/`[NotEmpty]` generates argument checks from constructor parameters. |
 | [**AutoQuery.Generator**](https://github.com/Swevo/AutoQuery.Generator) | Compile-time LINQ query specs — `[QuerySpec(typeof(T))]` generates `Apply(IQueryable<T>)`. |
+
 ## License
 
 MIT © Justin Bannister
