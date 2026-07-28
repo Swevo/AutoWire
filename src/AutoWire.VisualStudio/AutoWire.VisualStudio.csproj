@@ -30,7 +30,18 @@
     <CopyBuildOutputToOutputDirectory>true</CopyBuildOutputToOutputDirectory>
     <CopyOutputSymbolsToOutputDirectory>false</CopyOutputSymbolsToOutputDirectory>
     <CreateVsixContainer>true</CreateVsixContainer>
-    <DeployExtension>false</DeployExtension>
+    <!--
+      DeployExtension must be true when Visual Studio itself builds+launches this project (F5) so the
+      built VSIX/pkgdef gets copied into the experimental instance's extensions folder
+      (%LocalAppData%\Microsoft\VisualStudio\<version>Exp\Extensions) - without this, devenv /rootsuffix Exp
+      launches a clean hive with the extension never installed, so nothing appears to happen. However the
+      VSSDK Deploy target explicitly refuses to run under `dotnet build` ("VSIX deployment is not supported
+      with 'dotnet build'"), so this must only be enabled when MSBuild is invoked from inside Visual Studio
+      itself (BuildingInsideVisualStudio=true, set automatically by VS's own build/F5), never for
+      command-line `dotnet build`/`dotnet restore`, which must keep working unmodified.
+    -->
+    <DeployExtension Condition="'$(Configuration)' == 'Debug' AND '$(BuildingInsideVisualStudio)' == 'true'">true</DeployExtension>
+    <DeployExtension Condition="'$(DeployExtension)' == ''">false</DeployExtension>
     <StartAction>Program</StartAction>
     <StartProgram Condition="'$(DevEnvDir)' != ''">$(DevEnvDir)devenv.exe</StartProgram>
     <StartArguments>/rootsuffix Exp</StartArguments>

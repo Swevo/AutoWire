@@ -2,7 +2,9 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
-             Background="{DynamicResource {x:Static SystemColors.WindowBrushKey}}"
+             xmlns:vsui="clr-namespace:Microsoft.VisualStudio.PlatformUI;assembly=Microsoft.VisualStudio.Shell.15.0"
+             Background="{DynamicResource {x:Static vsui:EnvironmentColors.ToolWindowBackgroundBrushKey}}"
+             TextElement.Foreground="{DynamicResource {x:Static vsui:EnvironmentColors.ToolWindowTextBrushKey}}"
              MinWidth="400" MinHeight="300">
     <DockPanel LastChildFill="True" Margin="6">
         <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,6">
@@ -10,7 +12,8 @@
                     ToolTip="Pick a generated AutoWireDependencyGraph.g.cs file (under a project's obj\Generated folder)" />
             <Button x:Name="RenderButton" Content="Render" Padding="8,2" Margin="0,0,6,0" Click="RenderButton_Click"
                     ToolTip="Render the pasted or loaded Mermaid text" />
-            <TextBlock x:Name="StatusText" VerticalAlignment="Center" Margin="6,0,0,0" Foreground="Gray" />
+            <TextBlock x:Name="StatusText" VerticalAlignment="Center" Margin="6,0,0,0"
+                       Foreground="{DynamicResource {x:Static vsui:EnvironmentColors.ToolWindowTextBrushKey}}" Opacity="0.7" />
         </StackPanel>
 
         <Grid DockPanel.Dock="Top" Height="90" Margin="0,0,0,6">
@@ -18,15 +21,20 @@
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
             </Grid.RowDefinitions>
-            <TextBlock Grid.Row="0" Text="Or paste Mermaid text directly:" Margin="0,0,0,2" Foreground="Gray" />
+            <TextBlock Grid.Row="0" Text="Or paste Mermaid text directly:" Margin="0,0,0,2"
+                       Foreground="{DynamicResource {x:Static vsui:EnvironmentColors.ToolWindowTextBrushKey}}" Opacity="0.7" />
             <TextBox x:Name="PasteTextBox" Grid.Row="1" AcceptsReturn="True" AcceptsTab="True" TextWrapping="NoWrap"
                      VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
-                     FontFamily="Consolas" FontSize="11" />
+                     FontFamily="Consolas" FontSize="11"
+                     Background="{DynamicResource {x:Static vsui:EnvironmentColors.ToolWindowBackgroundBrushKey}}"
+                     Foreground="{DynamicResource {x:Static vsui:EnvironmentColors.ToolWindowTextBrushKey}}"
+                     BorderBrush="{DynamicResource {x:Static vsui:EnvironmentColors.ToolWindowBorderBrushKey}}" />
         </Grid>
 
         <Grid x:Name="WebViewHost">
             <wv2:WebView2 x:Name="MermaidWebView" />
-            <TextBlock x:Name="FallbackMessage" TextWrapping="Wrap" Visibility="Collapsed" Margin="8" />
+            <TextBlock x:Name="FallbackMessage" TextWrapping="Wrap" Visibility="Collapsed" Margin="8"
+                       Foreground="{DynamicResource {x:Static vsui:EnvironmentColors.ToolWindowTextBrushKey}}" />
         </Grid>
     </DockPanel>
 </UserControl>

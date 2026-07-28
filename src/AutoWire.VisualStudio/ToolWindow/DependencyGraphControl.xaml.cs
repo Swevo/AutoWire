@@ -3,7 +3,9 @@ using System.IO;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
+using Microsoft.VisualStudio.PlatformUI;
 using Microsoft.VisualStudio.Shell;
+using Microsoft.Web.WebView2.Core;
 using Microsoft.Win32;
 
 namespace AutoWire.VisualStudio.ToolWindow
@@ -21,11 +23,26 @@ namespace AutoWire.VisualStudio.ToolWindow
             RegexOptions.Singleline | RegexOptions.Compiled);
 
         private bool _webViewInitialized;
+        private string _lastRenderedMermaid;
 
         public DependencyGraphControl()
         {
             InitializeComponent();
             Loaded += OnLoaded;
+            Unloaded += OnUnloaded;
+            VSColorTheme.ThemeChanged += OnVsThemeChanged;
+        }
+
+        private void OnUnloaded(object sender, RoutedEventArgs e)
+        {
+            VSColorTheme.ThemeChanged -= OnVsThemeChanged;
+        }
+
+        private void OnVsThemeChanged(ThemeChangedEventArgs e)
+        {
+            // Re-render with the new theme's colors so the diagram doesn't stay stuck with the old palette.
+            if (_lastRenderedMermaid is not null)
+                _ = RenderAsync(_lastRenderedMermaid);
         }
 
         private async void OnLoaded(object sender, RoutedEventArgs e)
@@ -83,7 +100,20 @@ namespace AutoWire.VisualStudio.ToolWindow
 
             try
             {
-                await MermaidWebView.EnsureCoreWebView2Async();
+                // WebView2's default environment places its user-data folder next to the hosting
+                // executable (devenv.exe, typically under Program Files), which a non-elevated user
+                // cannot write to and fails with E_ACCESSDENIED (0x80070005). Point it at a writable,
+                // per-user folder instead.
+                var userDataFolder = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "AutoWire", "WebView2");
+                Directory.CreateDirectory(userDataFolder);
+
+                var environment = await CoreWebView2Environment.CreateAsync(
+                    browserExecutableFolder: null,
+                    userDataFolder: userDataFolder);
+
+                await MermaidWebView.EnsureCoreWebView2Async(environment);
                 _webViewInitialized = true;
                 FallbackMessage.Visibility = Visibility.Collapsed;
                 MermaidWebView.Visibility = Visibility.Visible;
@@ -121,6 +151,7 @@ namespace AutoWire.VisualStudio.ToolWindow
             {
                 var html = BuildHtml(mermaidText);
                 MermaidWebView.NavigateToString(html);
+                _lastRenderedMermaid = mermaidText;
                 StatusText.Text = $"Rendered {DateTime.Now:T}";
             }
             catch (Exception ex)
@@ -129,16 +160,23 @@ namespace AutoWire.VisualStudio.ToolWindow
             }
         }
 
-        /// <summary>Builds a standalone HTML document that loads mermaid.js from a CDN and renders the given graph text.</summary>
+        /// <summary>Builds a standalone HTML document that loads mermaid.js from a CDN and renders the given
+        /// graph text, styled to match the current Visual Studio color theme (dark or light).</summary>
         private static string BuildHtml(string mermaidText)
         {
             var escaped = System.Net.WebUtility.HtmlEncode(mermaidText);
+
+            var background = ToHex(VSColorTheme.GetThemedColor(EnvironmentColors.ToolWindowBackgroundColorKey));
+            var foreground = ToHex(VSColorTheme.GetThemedColor(EnvironmentColors.ToolWindowTextColorKey));
+            var isDark = IsDark(VSColorTheme.GetThemedColor(EnvironmentColors.ToolWindowBackgroundColorKey));
+            var mermaidTheme = isDark ? "dark" : "default";
+
             return $@"<!DOCTYPE html>
 <html>
 <head>
 <meta charset='utf-8' />
 <style>
-  body {{ margin: 0; padding: 8px; font-family: Segoe UI, sans-serif; background: #ffffff; }}
+  body {{ margin: 0; padding: 8px; font-family: Segoe UI, sans-serif; background: {background}; color: {foreground}; }}
   #status {{ color: #888; font-size: 12px; margin-bottom: 6px; }}
 </style>
 <script src='https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js'></script>
@@ -150,7 +188,7 @@ namespace AutoWire.VisualStudio.ToolWindow
 </pre>
 <script>
   try {{
-    mermaid.initialize({{ startOnLoad: true, securityLevel: 'loose', theme: 'default' }});
+    mermaid.initialize({{ startOnLoad: true, securityLevel: 'loose', theme: '{mermaidTheme}' }});
     document.getElementById('status').textContent = '';
   }} catch (e) {{
     document.getElementById('status').textContent = 'mermaid.js failed to load or render: ' + e;
@@ -159,5 +197,12 @@ namespace AutoWire.VisualStudio.ToolWindow
 </body>
 </html>";
         }
+
+        private static string ToHex(System.Drawing.Color color) =>
+            $"#{color.R:X2}{color.G:X2}{color.B:X2}";
+
+        /// <summary>Perceptual luminance check used to pick mermaid's 'dark' vs 'default' theme.</summary>
+        private static bool IsDark(System.Drawing.Color color) =>
+            (0.299 * color.R + 0.587 * color.G + 0.114 * color.B) < 128;
     }
 }
