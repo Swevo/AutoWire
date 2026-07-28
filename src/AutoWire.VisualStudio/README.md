@@ -6,7 +6,10 @@ AutoWire source generator with IDE tooling. It is **not** part of the CI/NuGet p
 - It targets `net472` and requires Visual Studio SDK assemblies (`Microsoft.VisualStudio.SDK`), which
   only build on Windows.
 - It is **not** referenced by `AutoWire.slnx` (the solution built by `.github/workflows/build.yml` on
-  `ubuntu-latest`). It has its own solution file, `AutoWire.VisualStudio.slnx`, at the repo root.
+  `ubuntu-latest`). It has its own solution file, `src/AutoWire.VisualStudio/AutoWire.VisualStudio.slnx`,
+  kept inside this folder (not at the repo root) so that a bare `dotnet restore`/`dotnet build` at the
+  repo root (as CI and most local workflows use) keeps resolving unambiguously to `AutoWire.slnx` — having
+  two `.slnx` files at the root causes `MSB1011: Specify which project or solution file to use`.
 - Nothing here is published to NuGet (`IsPackable=false`).
 
 ## Features
@@ -107,20 +110,19 @@ around these file types benefits from it).
 ### Alternative: build via the standalone solution
 
 ```powershell
+cd src\AutoWire.VisualStudio
 & "C:\Program Files\Microsoft Visual Studio\18\Enterprise\MSBuild\Current\Bin\MSBuild.exe" `
     AutoWire.VisualStudio.slnx /restore /p:Configuration=Debug /nologo
 ```
 
-(run from the repo root) — this also succeeds and produces the same `.vsix`.
-
-`dotnet build` was **not** used for the final packaging step because the classic VSIX packaging targets
-(`Microsoft.VsSDK.targets`) are designed for full MSBuild's task/target execution model; `dotnet restore`
-works fine for resolving packages, but `dotnet build` was not attempted/needed here since VS's own MSBuild
-succeeded directly with `/restore`.
+this also succeeds and produces the same `.vsix`. Plain `dotnet build src\AutoWire.VisualStudio\AutoWire.VisualStudio.csproj`
+(or `dotnet build src\AutoWire.VisualStudio\AutoWire.VisualStudio.slnx`) also works and produces the same
+output — either build entry point is fine.
 
 ## Installing / debugging
 
-- **Debug (Experimental Instance):** open `AutoWire.VisualStudio.slnx` (or the `.csproj` directly) in
+- **Debug (Experimental Instance):** open `src/AutoWire.VisualStudio/AutoWire.VisualStudio.slnx` (or the
+  `.csproj` directly) in
   Visual Studio 2022+/18 with the **"Visual Studio extension development"** workload installed, and press
   **F5**. This launches a separate "Experimental Instance" of Visual Studio with the extension loaded, so
   you can try it against real C# projects without affecting your main VS installation.
