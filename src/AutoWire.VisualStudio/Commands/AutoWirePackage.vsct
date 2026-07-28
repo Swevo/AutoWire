@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CommandTable xmlns="http://schemas.microsoft.com/VisualStudio/2005-10-18/CommandTable" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+
+  <Extern href="stdidcmd.h" />
+  <Extern href="vsshlids.h" />
+
+  <Commands package="guidAutoWirePackage">
+    <Groups>
+      <!-- Group hosting the AutoWire menu on the main menu bar. -->
+      <Group guid="guidAutoWirePackageCmdSet" id="AutoWireMenuGroup" priority="0x0600">
+        <Parent guid="guidSHLMainMenu" id="IDG_VS_MM_TOOLSADDINS" />
+      </Group>
+
+      <!-- Group hosting the commands inside the AutoWire menu. -->
+      <Group guid="guidAutoWirePackageCmdSet" id="AutoWireMenuCommandsGroup" priority="0x0100">
+        <Parent guid="guidAutoWirePackageCmdSet" id="AutoWireMenu" />
+      </Group>
+    </Groups>
+
+    <Menus>
+      <Menu guid="guidAutoWirePackageCmdSet" id="AutoWireMenu" priority="0x0700" type="Menu">
+        <Parent guid="guidSHLMainMenu" id="IDG_VS_MM_TOOLSADDINS" />
+        <Strings>
+          <ButtonText>AutoWire</ButtonText>
+          <CommandName>AutoWire</CommandName>
+        </Strings>
+      </Menu>
+    </Menus>
+
+    <Buttons>
+      <Button guid="guidAutoWirePackageCmdSet" id="ShowDependencyGraphCommandId" priority="0x0100" type="Button">
+        <Parent guid="guidAutoWirePackageCmdSet" id="AutoWireMenuCommandsGroup" />
+        <Icon guid="guidAutoWireImages" id="bmpDependencyGraph" />
+        <Strings>
+          <ButtonText>Show Dependency Graph...</ButtonText>
+          <CommandName>ShowDependencyGraph</CommandName>
+        </Strings>
+      </Button>
+    </Buttons>
+
+    <Bitmaps>
+      <Bitmap guid="guidAutoWireImages" href="..\Resources\CommandIcon.png" usedList="bmpDependencyGraph" />
+    </Bitmaps>
+  </Commands>
+
+  <Symbols>
+    <GuidSymbol name="guidAutoWirePackage" value="{4584d75c-82f0-42d9-98c2-cbc6a65a183e}" />
+
+    <GuidSymbol name="guidAutoWirePackageCmdSet" value="{382281e8-030b-45bd-a5e4-875fea424d0c}">
+      <IDSymbol name="AutoWireMenuGroup" value="0x1020" />
+      <IDSymbol name="AutoWireMenu" value="0x1021" />
+      <IDSymbol name="AutoWireMenuCommandsGroup" value="0x1022" />
+      <IDSymbol name="ShowDependencyGraphCommandId" value="0x0100" />
+    </GuidSymbol>
+
+    <GuidSymbol name="guidAutoWireImages" value="{afe6a4b4-e40d-4681-ba24-af1244d4351e}">
+      <IDSymbol name="bmpDependencyGraph" value="1" />
+    </GuidSymbol>
+  </Symbols>
+</CommandTable>

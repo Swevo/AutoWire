@@ -1,0 +1,87 @@
+<Project>
+  <Import Project="Sdk.props" Sdk="Microsoft.NET.Sdk" />
+
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <UseWPF>true</UseWPF>
+    <Deterministic>true</Deterministic>
+    <RootNamespace>AutoWire.VisualStudio</RootNamespace>
+    <AssemblyName>AutoWire.VisualStudio</AssemblyName>
+
+    <!--
+      Microsoft.VsSDK.targets (imported explicitly below) is written for the classic, non-SDK-style VSIX
+      project format and expects IntermediateOutputPath/OutDir to already be fully resolved (including the
+      target framework segment) by the time it is imported. For SDK-style projects that final resolution
+      normally happens later, in the SDK's own implicitly-imported closing targets - so pin both here to the
+      same values the SDK would otherwise compute, to avoid VSIX packaging writing manifests to the drive root.
+    -->
+    <IntermediateOutputPath>obj\$(Configuration)\$(TargetFramework)\</IntermediateOutputPath>
+    <OutputPath>bin\$(Configuration)\$(TargetFramework)\</OutputPath>
+    <OutDir>$(OutputPath)</OutDir>
+
+    <!-- VSIX / VS SDK project settings -->
+    <GeneratePkgDefFile>true</GeneratePkgDefFile>
+    <UseCodebase>true</UseCodebase>
+    <IncludeAssemblyInVSIXContainer>true</IncludeAssemblyInVSIXContainer>
+    <IncludeDebugSymbolsInVSIXContainer>false</IncludeDebugSymbolsInVSIXContainer>
+    <IncludeDebugSymbolsInLocalVSIXDeployment>false</IncludeDebugSymbolsInLocalVSIXDeployment>
+    <CopyBuildOutputToOutputDirectory>true</CopyBuildOutputToOutputDirectory>
+    <CopyOutputSymbolsToOutputDirectory>false</CopyOutputSymbolsToOutputDirectory>
+    <CreateVsixContainer>true</CreateVsixContainer>
+    <DeployExtension>false</DeployExtension>
+    <StartAction>Program</StartAction>
+    <StartProgram Condition="'$(DevEnvDir)' != ''">$(DevEnvDir)devenv.exe</StartProgram>
+    <StartArguments>/rootsuffix Exp</StartArguments>
+
+    <!-- Not part of the CI/NuGet pipeline: Windows-only, requires the VS SDK, built locally. -->
+    <IsPackable>false</IsPackable>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <AppDesignerFolder>Properties</AppDesignerFolder>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="System.ComponentModel.Composition" />
+    <Reference Include="System.Design" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.VisualStudio.SDK" Version="17.14.40265" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.VSSDK.BuildTools" Version="17.14.2142" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3124.44" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <VSCTCompile Include="Commands\AutoWirePackage.vsct">
+      <ResourceName>Menus.ctmenu</ResourceName>
+    </VSCTCompile>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="source.extension.vsixmanifest">
+      <SubType>Designer</SubType>
+    </None>
+    <Content Include="Resources\Icon.png">
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+    <Content Include="LICENSE.txt">
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+  </ItemGroup>
+
+  <!--
+    SDK-style csproj files don't get the classic VSIX-project `<Import>` that Visual Studio's own VSIX
+    project template injects automatically. Microsoft.VSSDK.BuildTools ships the actual VSIX packaging
+    logic (CreateVsixContainer, VSCTCompile, GeneratePkgDef, etc.) at tools\vssdk\Microsoft.VsSDK.targets
+    inside the NuGet package itself, so this works even without the "Visual Studio extension development"
+    workload installed - it just needs to be imported explicitly, and it needs to be imported *after*
+    Sdk.targets (rather than relying on the implicit trailing Sdk.targets import that "<Project Sdk=...>"
+    would otherwise add), because Microsoft.VsSDK.targets appends itself to DependsOn chains such as
+    PrepareForRunDependsOn that Sdk.targets/Microsoft.Common.CurrentVersion.targets would otherwise
+    overwrite if imported afterwards.
+  -->
+  <Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk" />
+  <Import Project="$(VSToolsPath)\VSSDK\Microsoft.VsSDK.targets" Condition="'$(VSToolsPath)' != '' and Exists('$(VSToolsPath)\VSSDK\Microsoft.VsSDK.targets')" />
+
+</Project>
