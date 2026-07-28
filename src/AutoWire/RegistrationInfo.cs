@@ -26,6 +26,12 @@ internal sealed class RegistrationInfo
     /// and is NOT included in the main <c>AddAutoWireServices()</c> call.
     /// </summary>
     public string? Module { get; }
+    /// <summary>
+    /// When set, the generated code reads <c>configuration?["AutoWire:Lifetime:" + ConfigKey]</c> at
+    /// runtime and switches between Scoped/Singleton/Transient based on the value, falling back to
+    /// <see cref="Lifetime"/> when the key is absent or unrecognized.
+    /// </summary>
+    public string? ConfigKey { get; }
 
     public RegistrationInfo(
         string implementationType,
@@ -39,7 +45,8 @@ internal sealed class RegistrationInfo
         bool isScanned = false,
         string? condition = null,
         bool includeLazy = false,
-        string? module = null)
+        string? module = null,
+        string? configKey = null)
     {
         ImplementationType = implementationType;
         ServiceTypes = serviceTypes;
@@ -53,6 +60,7 @@ internal sealed class RegistrationInfo
         Condition = condition;
         IncludeLazy = includeLazy;
         Module = module;
+        ConfigKey = configKey;
     }
 
     public override bool Equals(object? obj) =>
@@ -68,7 +76,8 @@ internal sealed class RegistrationInfo
         IsScanned == other.IsScanned &&
         Condition == other.Condition &&
         IncludeLazy == other.IncludeLazy &&
-        Module == other.Module;
+        Module == other.Module &&
+        ConfigKey == other.ConfigKey;
 
     public override int GetHashCode()
     {
@@ -85,6 +94,7 @@ internal sealed class RegistrationInfo
             h = h * 397 ^ (Condition?.GetHashCode() ?? 0);
             h = h * 397 ^ IncludeLazy.GetHashCode();
             h = h * 397 ^ (Module?.GetHashCode() ?? 0);
+            h = h * 397 ^ (ConfigKey?.GetHashCode() ?? 0);
             foreach (var s in ServiceTypes)
                 h = h * 397 ^ s.GetHashCode();
             return h;

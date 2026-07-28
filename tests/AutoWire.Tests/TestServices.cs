@@ -318,3 +318,13 @@ public class SmsChannel : INotificationChannel
 {
     public void Notify(string msg) => throw new NotImplementedException();
 }
+
+// ── ConfigKey: runtime lifetime override via IConfiguration ───────────────────
+
+public interface IConfigurableService { Guid InstanceId { get; } }
+
+[Scoped(ConfigKey = "ConfigurableService")]
+public class ConfigurableService : IConfigurableService
+{
+    public Guid InstanceId { get; } = Guid.NewGuid();
+}

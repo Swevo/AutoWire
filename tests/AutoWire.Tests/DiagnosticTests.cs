@@ -895,6 +895,222 @@ public class DiagnosticTests
         Assert.DoesNotContain(diagnostics, d => d.Id is "AW014" or "AW015");
     }
 
+    // ── AW016: circular dependency detection ──────────────────────────────────
+
+    [Fact]
+    public void AW016_TwoServicesDependOnEachOther_EmitsError()
+    {
+        var source = """
+            public interface IServiceA { }
+            public interface IServiceB { }
+
+            [AutoWire.Scoped]
+            public class ServiceA : IServiceA
+            {
+                public ServiceA(IServiceB b) { }
+            }
+
+            [AutoWire.Scoped]
+            public class ServiceB : IServiceB
+            {
+                public ServiceB(IServiceA a) { }
+            }
+            """;
+
+        var diagnostics = RunGenerator(source);
+        Assert.Contains(diagnostics, d => d.Id == "AW016");
+    }
+
+    [Fact]
+    public void AW016_NoCircularDependency_NoError()
+    {
+        var source = """
+            public interface IServiceA { }
+            public interface IServiceB { }
+
+            [AutoWire.Scoped]
+            public class ServiceB : IServiceB { }
+
+            [AutoWire.Scoped]
+            public class ServiceA : IServiceA
+            {
+                public ServiceA(IServiceB b) { }
+            }
+            """;
+
+        var diagnostics = RunGenerator(source);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "AW016");
+    }
+
+    // ── AW017: unused registration detection ──────────────────────────────────
+
+    [Fact]
+    public void AW017_RegisteredServiceNeverReferenced_EmitsInfo()
+    {
+        var source = """
+            public interface IUnusedService { }
+
+            [AutoWire.Scoped]
+            public class UnusedService : IUnusedService { }
+            """;
+
+        var diagnostics = RunGenerator(source);
+        Assert.Contains(diagnostics, d => d.Id == "AW017");
+    }
+
+    [Fact]
+    public void AW017_RegisteredServiceUsedAsConstructorParameter_NoInfo()
+    {
+        var source = """
+            public interface IUsedService { }
+
+            [AutoWire.Scoped]
+            public class UsedService : IUsedService { }
+
+            public class Consumer
+            {
+                public Consumer(IUsedService svc) { }
+            }
+            """;
+
+        var diagnostics = RunGenerator(source);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "AW017");
+    }
+
+    [Fact]
+    public void AW017_RegisteredServiceUsedViaGetService_NoInfo()
+    {
+        var source = """
+            using Microsoft.Extensions.DependencyInjection;
+
+            public interface IUsedService { }
+
+            [AutoWire.Scoped]
+            public class UsedService : IUsedService { }
+
+            public class Consumer
+            {
+                public Consumer(System.IServiceProvider sp)
+                {
+                    var svc = sp.GetService<IUsedService>();
+                }
+            }
+            """;
+
+        var diagnostics = RunGenerator(source);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "AW017");
+    }
+
+    [Fact]
+    public void AW017_ModuleService_NotFlagged()
+    {
+        var source = """
+            public interface IModuleService { }
+
+            [AutoWire.Scoped(Module = "Extras")]
+            public class ModuleService : IModuleService { }
+            """;
+
+        var diagnostics = RunGenerator(source);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "AW017");
+    }
+
+    // ── [Endpoint]: minimal API mapping ────────────────────────────────────────
+
+    [Fact]
+    public void Endpoint_WithHandleMethodAndRoutingReferenced_GeneratesMapMethod()
+    {
+        var routingStub = CreateEndpointRoutingStub();
+        var source = """
+            [AutoWire.Endpoint("GET", "/orders/{id}")]
+            public static class GetOrder
+            {
+                public static string Handle(int id) => id.ToString();
+            }
+            """;
+
+        var (_, sources) = RunGeneratorWithSources(source, routingStub);
+        Assert.Contains(sources, s => s.HintName.Contains("AutoWireEndpoints"));
+        var code = sources.First(s => s.HintName.Contains("AutoWireEndpoints")).SourceText.ToString();
+        Assert.Contains("MapAutoWireEndpoints", code);
+        Assert.Contains("app.MapGet(\"/orders/{id}\", global::GetOrder.Handle);", code);
+    }
+
+    [Fact]
+    public void Endpoint_PostVerb_MapsToMapPost()
+    {
+        var routingStub = CreateEndpointRoutingStub();
+        var source = """
+            [AutoWire.Endpoint("POST", "/orders")]
+            public static class CreateOrder
+            {
+                public static string HandleAsync() => "ok";
+            }
+            """;
+
+        var (_, sources) = RunGeneratorWithSources(source, routingStub);
+        var code = sources.First(s => s.HintName.Contains("AutoWireEndpoints")).SourceText.ToString();
+        Assert.Contains("app.MapPost(\"/orders\", global::CreateOrder.HandleAsync);", code);
+    }
+
+    [Fact]
+    public void Endpoint_UnknownVerb_FallsBackToMapMethods()
+    {
+        var routingStub = CreateEndpointRoutingStub();
+        var source = """
+            [AutoWire.Endpoint("OPTIONS", "/orders")]
+            public static class OptionsOrder
+            {
+                public static string Handle() => "ok";
+            }
+            """;
+
+        var (_, sources) = RunGeneratorWithSources(source, routingStub);
+        var code = sources.First(s => s.HintName.Contains("AutoWireEndpoints")).SourceText.ToString();
+        Assert.Contains("app.MapMethods(\"/orders\", new[] { \"OPTIONS\" }, global::OptionsOrder.Handle);", code);
+    }
+
+    [Fact]
+    public void Endpoint_WithoutHandleMethod_SilentlySkipped()
+    {
+        var routingStub = CreateEndpointRoutingStub();
+        var source = """
+            [AutoWire.Endpoint("GET", "/nohandle")]
+            public static class NoHandleClass
+            {
+                public static string SomethingElse() => "ok";
+            }
+            """;
+
+        var (diagnostics, sources) = RunGeneratorWithSources(source, routingStub);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == DiagnosticSeverity.Error);
+        Assert.DoesNotContain(sources, s => s.HintName.Contains("AutoWireEndpoints")); // no eligible endpoints → file not emitted
+    }
+
+    [Fact]
+    public void Endpoint_WithoutRoutingReference_NoFileGenerated()
+    {
+        var source = """
+            [AutoWire.Endpoint("GET", "/orders/{id}")]
+            public static class GetOrderNoRouting
+            {
+                public static string Handle(int id) => id.ToString();
+            }
+            """;
+
+        var (_, sources) = RunGeneratorWithSources(source); // no routing stub reference
+        Assert.DoesNotContain(sources, s => s.HintName.Contains("AutoWireEndpoints"));
+    }
+
+    private static MetadataReference CreateEndpointRoutingStub() => CreateReferencedAssembly(
+        "RoutingStubAssembly",
+        """
+        namespace Microsoft.AspNetCore.Routing
+        {
+            public interface IEndpointRouteBuilder { }
+        }
+        """);
+
     private static IReadOnlyList<Diagnostic> RunGenerator(string source)
     {
         var (diagnostics, _) = RunGeneratorWithSources(source);

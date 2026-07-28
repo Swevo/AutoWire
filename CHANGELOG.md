@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.23.0] — 2026-06-26
+
+### Added
+- **AW016 diagnostic (Error)** — circular dependency detection. Builds a directed graph of AutoWire-registered services from constructor parameter types and runs cycle detection; reports every class in the cycle with the full chain, e.g. `OrderService -> InvoiceService -> OrderService`.
+- **AW017 diagnostic (Info)** — unused registration detection. Flags a registered service type that is never referenced as a constructor parameter or via `GetService<T>()`/`GetRequiredService<T>()`/`GetKeyedService<T>()`/`GetRequiredKeyedService<T>()` anywhere in the compilation. Skips `IncludeSelf`, `Module`, open-generic, and scanned registrations to reduce noise.
+- **AW013 allowlist expanded** — `CancellationToken`, `IHostApplicationLifetime`, and FluentValidation's `IValidator<T>` no longer trigger a false-positive "not registered" warning. AW013 also ships a new best-effort code fix: *"Add [Scoped] to '{Type}'"* — inserts `[Scoped]` directly on the referenced type's class declaration when it's declared in the same project.
+- **Dependency graph export** — generates `AutoWireDependencyGraph.g.cs` with `AutoWireDependencyGraph.Mermaid`, a compile-time `graph TD` [Mermaid](https://mermaid.js.org/) diagram of every registration and its constructor-dependency edges (reuses the same graph as AW016). Paste it straight into [mermaid.live](https://mermaid.live).
+- **`ConfigKey` property** on all six registration attributes (`[Scoped]`/`[Singleton]`/`[Transient]`/`[TryScoped]`/`[TrySingleton]`/`[TryTransient]`) — resolves the lifetime at runtime from `configuration["AutoWire:Lifetime:" + ConfigKey]` ("Scoped"/"Singleton"/"Transient", case-insensitive), falling back to the attribute's declared lifetime when the key is absent or unrecognized:
+  ```csharp
+  [Scoped(ConfigKey = "OrderService")]
+  public class OrderService : IOrderService { }
+  ```
+  `AddAutoWireServices()` (and generated `Add{Module}Module()` methods) gain an optional `IConfiguration? configuration = null` parameter, added automatically and backward-compatibly only when the project references `Microsoft.Extensions.Configuration.Abstractions`.
+- **`[Endpoint(method, route)]` attribute** — maps a class with a `public static Handle`/`HandleAsync` method as a minimal API route. Generates `MapAutoWireEndpoints(this IEndpointRouteBuilder app)` in `AutoWireEndpoints.g.cs`, dispatching to `MapGet`/`MapPost`/`MapPut`/`MapDelete`/`MapPatch` (or `MapMethods` for other verbs). Only emitted when at least one `[Endpoint]` usage exists and the project references ASP.NET Core routing.
+- **`OverrideService` test helpers** — `services.OverrideService<TService, TImplementation>(lifetime)` and `services.OverrideService<TService>(instance)` remove existing registrations for `TService` before adding the replacement, so test setup doesn't need to worry about registration order or duplicate-strategy edge cases.
+- **Hover/IntelliSense documentation** — `AddAutoWireServices()` and generated `Add{Module}Module()` methods now carry an XML `<remarks>` block listing the registered services (`IFoo -> Foo (Scoped)`, capped at 50 entries with a "... and N more" note), visible on hover in the IDE.
+
+---
+
 ## [1.21.0] — 2026-06-25
 
 ### Added

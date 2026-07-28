@@ -153,6 +153,7 @@ public class CheckoutController(IOrderService orders, ICache cache)
 | `[HttpClient]` | — | `services.AddHttpClient<T>()` |
 | `[Validate]` | Scoped | `services.AddScoped<IValidator<T>, ValidatorClass>()` |
 | `[Interceptor(typeof(IFoo))]` | Scoped (proxy) | Generates a `file sealed` proxy class; registers it as `IFoo` implementation |
+| `[Endpoint("GET", "/route")]` | — | `app.MapGet("/route", ClassName.Handle)` via generated `MapAutoWireEndpoints()` |
 
 All attributes (except `[HostedService]` and `[Factory]`) support these shared properties:
 
@@ -167,6 +168,7 @@ All attributes (except `[HostedService]` and `[Factory]`) support these shared p
 | `Condition` | `string?` | Wrap in `#if SYMBOL ... #endif` at compile time |
 | `IncludeLazy` | `bool` | Also register `Lazy<T>` via `AddTransient` |
 | `Module` | `string?` | Place service in a named module — excluded from `AddAutoWireServices()`, gets its own `Add{Module}Module()` method |
+| `ConfigKey` | `string?` | Resolve the lifetime at runtime from `configuration["AutoWire:Lifetime:" + ConfigKey]` (`"Scoped"`/`"Singleton"`/`"Transient"`, case-insensitive), falling back to the attribute's declared lifetime when absent/unrecognized. Only applies to the six registration attributes (`Scoped`/`Singleton`/`Transient`/`Try*`). Requires an `IConfiguration? configuration = null` parameter on the generated `AddAutoWireServices()` (added automatically when your project references `Microsoft.Extensions.Configuration.Abstractions`) |
 
 ```csharp
 // Auto-discover all non-system interfaces
@@ -344,7 +346,7 @@ services.AddHostedService<global::DataSyncWorker>();
 
 ## Roslyn diagnostics
 
-AutoWire ships **fifteen built-in diagnostics** that surface problems **as squiggles in the IDE** — no runtime surprises.
+AutoWire ships **seventeen built-in diagnostics** that surface problems **as squiggles in the IDE** — no runtime surprises.
 
 | ID | Severity | Condition |
 |---|---|---|
@@ -363,6 +365,8 @@ AutoWire ships **fifteen built-in diagnostics** that surface problems **as squig
 | AW013 | ⚠ Warning | A registered service constructor depends on a type that is **not registered in the AutoWire graph** |
 | AW014 | ❌ Error | `[ScanAssembly]` marker type does **not come from a referenced assembly** |
 | AW015 | ⚠ Warning | `[ScanAssembly]` resolved the assembly, but found **no AutoWire-attributed public services** in it |
+| AW016 | ❌ Error | **Circular dependency** detected between AutoWire-registered services' constructors |
+| AW017 | ℹ Info | An AutoWire-registered service **appears unused** anywhere in the compilation |
 
 ### AW001 example
 
@@ -488,6 +492,35 @@ public class MyInterceptor : IAutoWireInterceptor { ... }
 ```
 
 AW004 covers both `[Singleton]` and `[TrySingleton]`, and detects scoped services registered via `[Scoped]` or `[TryScoped]`.
+
+### AW016 example
+
+```csharp
+// ❌ AW016 Error: Circular dependency detected: OrderService -> InvoiceService -> OrderService.
+[Scoped]
+public class OrderService
+{
+    public OrderService(IInvoiceService invoices) { }
+}
+
+[Scoped]
+public class InvoiceService : IInvoiceService
+{
+    public InvoiceService(OrderService orders) { }  // ← cycle!
+}
+
+// ✅ Fix — break the cycle with IServiceScopeFactory, a Lazy<T> dependency, or an event/callback abstraction.
+```
+
+### AW017 example
+
+```csharp
+// ℹ AW017 Info: Service 'IReportArchiver' is registered by AutoWire but does not appear to be used anywhere in this compilation.
+[Scoped]
+public class ReportArchiver : IReportArchiver { }
+// No constructor anywhere takes an IReportArchiver, and no GetService<IReportArchiver>() call exists.
+// Often harmless (e.g. consumed by a separate assembly), but worth double-checking for dead code.
+```
 
 ---
 
@@ -1205,6 +1238,75 @@ Available constants: `TotalCount` · `ScopedCount` · `SingletonCount` · `Trans
 
 ---
 
+## Dependency graph export — `AutoWireDependencyGraph`
+
+AutoWire also generates `AutoWireDependencyGraph.g.cs` with a compile-time [Mermaid](https://mermaid.js.org/) `graph TD` diagram of every registration and its constructor-dependency edges — paste it into [mermaid.live](https://mermaid.live) or render it in any Markdown viewer that supports Mermaid:
+
+```csharp
+using AutoWire;
+
+File.WriteAllText("dependency-graph.mmd", AutoWireDependencyGraph.Mermaid);
+```
+
+---
+
+## Runtime lifetime overrides — `ConfigKey`
+
+Set `ConfigKey` on any of the six registration attributes to let ops/config decide the lifetime at runtime instead of baking it in at compile time:
+
+```csharp
+[Scoped(ConfigKey = "OrderService")]
+public class OrderService : IOrderService { }
+```
+
+```json
+// appsettings.json
+{
+  "AutoWire": {
+    "Lifetime": {
+      "OrderService": "Singleton"
+    }
+  }
+}
+```
+
+```csharp
+// Pass IConfiguration through — the parameter is added automatically to AddAutoWireServices()
+// once your project references Microsoft.Extensions.Configuration.Abstractions.
+builder.Services.AddAutoWireServices(configuration: builder.Configuration);
+```
+
+At runtime AutoWire reads `configuration["AutoWire:Lifetime:OrderService"]`, matches it case-insensitively against `"Scoped"`/`"Singleton"`/`"Transient"`, and falls back to the attribute's own declared lifetime (`Scoped` in the example above) when the key is absent or unrecognized. Services without a `ConfigKey` are completely unaffected and keep generating the exact same code as before.
+
+---
+
+## Minimal API endpoints — `[Endpoint]`
+
+Map a class with a `public static Handle`/`HandleAsync` method as a minimal API route without hand-wiring `app.MapGet(...)` calls:
+
+```csharp
+using AutoWire;
+using Microsoft.AspNetCore.Http;
+
+[Endpoint("GET", "/orders/{id}")]
+public static class GetOrder
+{
+    public static IResult Handle(int id, IOrderService orders) =>
+        Results.Ok(orders.GetById(id));
+}
+```
+
+```csharp
+// Program.cs
+var app = builder.Build();
+app.MapAutoWireEndpoints(); // generated — maps every [Endpoint]-decorated class
+app.Run();
+```
+
+`GET`/`POST`/`PUT`/`DELETE`/`PATCH` map to `MapGet`/`MapPost`/`MapPut`/`MapDelete`/`MapPatch`; any other verb falls back to `app.MapMethods(route, new[] { method }, handler)`. `MapAutoWireEndpoints()` is only generated when at least one `[Endpoint]` usage exists **and** your project references ASP.NET Core routing (`Microsoft.AspNetCore.Routing.IEndpointRouteBuilder`) — projects without ASP.NET Core are unaffected.
+
+---
+
 ## Roslyn code fix providers
 
 AutoWire ships **IDE light-bulb fixes** for four diagnostics — click the squiggle, press `Alt+Enter`, and the fix is applied automatically:
@@ -1432,6 +1534,23 @@ services.AddAutoWireServices();          // production registrations
 
 services.AddScoped<IOrderService, FakeOrderService>();   // overrides — last wins
 services.AddScoped<IEmailSender, NullEmailSender>();
+```
+
+### Overriding with `OverrideService` — no ordering to remember
+
+`services.AddScoped<TService, TImpl>()` after production registration works, but with `Duplicate = DuplicateStrategy.Replace`/keyed services/multiple registrations for the same interface it can silently register a *second* implementation instead of replacing the first. `OverrideService` (ships with AutoWire, no extra package) removes every existing registration for the service type first, guaranteeing your test double wins:
+
+```csharp
+using AutoWire; // OverrideService extension methods
+
+services.AddAutoWireServices();
+
+// Replace with a different implementation type:
+services.OverrideService<IOrderService, FakeOrderService>();               // Scoped by default
+services.OverrideService<IEmailSender, NullEmailSender>(ServiceLifetime.Singleton);
+
+// Or override with a ready-made instance:
+services.OverrideService<IClock>(new FixedClock(DateTimeOffset.UnixEpoch));
 ```
 
 ### Fixing ambiguous method errors in test projects

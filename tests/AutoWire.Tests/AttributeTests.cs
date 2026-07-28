@@ -81,4 +81,26 @@ public class AttributeTests
         var attr = new ScanAssemblyAttribute(typeof(OrderService));
         Assert.Equal(typeof(OrderService), attr.MarkerType);
     }
+
+    [Fact]
+    public void ScopedAttribute_ConfigKey_DefaultsToNull()
+    {
+        var attr = new ScopedAttribute();
+        Assert.Null(attr.ConfigKey);
+    }
+
+    [Fact]
+    public void ScopedAttribute_ConfigKey_CanBeSet()
+    {
+        var attr = new ScopedAttribute { ConfigKey = "MyService" };
+        Assert.Equal("MyService", attr.ConfigKey);
+    }
+
+    [Fact]
+    public void EndpointAttribute_SetsMethodAndRoute()
+    {
+        var attr = new EndpointAttribute("GET", "/orders/{id}");
+        Assert.Equal("GET", attr.Method);
+        Assert.Equal("/orders/{id}", attr.Route);
+    }
 }

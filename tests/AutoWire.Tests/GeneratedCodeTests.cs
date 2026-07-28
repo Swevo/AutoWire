@@ -678,4 +678,130 @@ public class GeneratedCodeTests
     {
         Assert.NotEmpty(AutoWire.RegistrationSummary.RegisteredImplementations);
     }
+
+    // ── ConfigKey runtime lifetime override tests ──────────────────────────────
+
+    private sealed class FakeConfiguration : Microsoft.Extensions.Configuration.IConfiguration
+    {
+        private readonly System.Collections.Generic.Dictionary<string, string?> _values;
+        public FakeConfiguration(System.Collections.Generic.Dictionary<string, string?> values) => _values = values;
+
+        public string? this[string key]
+        {
+            get => _values.TryGetValue(key, out var v) ? v : null;
+            set => _values[key] = value;
+        }
+
+        public Microsoft.Extensions.Configuration.IConfigurationSection GetSection(string key) =>
+            throw new NotImplementedException();
+        public System.Collections.Generic.IEnumerable<Microsoft.Extensions.Configuration.IConfigurationSection> GetChildren() =>
+            throw new NotImplementedException();
+        public Microsoft.Extensions.Primitives.IChangeToken GetReloadToken() =>
+            throw new NotImplementedException();
+    }
+
+    [Fact]
+    public void ConfigKey_NoConfigurationSupplied_UsesDeclaredLifetime()
+    {
+        // ConfigurableService declares [Scoped(ConfigKey = "ConfigurableService")] — with no
+        // configuration passed, it should fall back to Scoped (same instance within a scope).
+        using var provider = BuildProvider();
+        using var scope = provider.CreateScope();
+        var a = scope.ServiceProvider.GetService<IConfigurableService>();
+        var b = scope.ServiceProvider.GetService<IConfigurableService>();
+        Assert.NotNull(a);
+        Assert.Same(a, b);
+    }
+
+    [Fact]
+    public void ConfigKey_ConfigOverridesToSingleton()
+    {
+        var config = new FakeConfiguration(new()
+        {
+            ["AutoWire:Lifetime:ConfigurableService"] = "Singleton"
+        });
+
+        var services = new ServiceCollection();
+        services.AddAutoWireServices(configuration: config);
+        using var provider = services.BuildServiceProvider();
+
+        using var scope1 = provider.CreateScope();
+        using var scope2 = provider.CreateScope();
+        var a = scope1.ServiceProvider.GetService<IConfigurableService>();
+        var b = scope2.ServiceProvider.GetService<IConfigurableService>();
+        Assert.NotNull(a);
+        Assert.Same(a, b); // singleton — same instance across scopes
+    }
+
+    [Fact]
+    public void ConfigKey_UnrecognizedValue_FallsBackToDeclaredLifetime()
+    {
+        var config = new FakeConfiguration(new()
+        {
+            ["AutoWire:Lifetime:ConfigurableService"] = "NotARealLifetime"
+        });
+
+        var services = new ServiceCollection();
+        services.AddAutoWireServices(configuration: config);
+        using var provider = services.BuildServiceProvider();
+
+        using var scope = provider.CreateScope();
+        var a = scope.ServiceProvider.GetService<IConfigurableService>();
+        var b = scope.ServiceProvider.GetService<IConfigurableService>();
+        Assert.Same(a, b); // still Scoped — the declared lifetime
+
+        using var otherScope = provider.CreateScope();
+        var c = otherScope.ServiceProvider.GetService<IConfigurableService>();
+        Assert.NotSame(a, c); // different scope → different instance (proves it's not Singleton)
+    }
+
+    // ── Dependency graph export tests ──────────────────────────────────────────
+
+    [Fact]
+    public void DependencyGraph_MermaidConstant_IsGeneratedAndNonEmpty()
+    {
+        Assert.False(string.IsNullOrWhiteSpace(AutoWire.AutoWireDependencyGraph.Mermaid));
+        Assert.Contains("graph TD", AutoWire.AutoWireDependencyGraph.Mermaid);
+    }
+
+    [Fact]
+    public void DependencyGraph_ContainsKnownServiceNode()
+    {
+        Assert.Contains("OrderService", AutoWire.AutoWireDependencyGraph.Mermaid);
+    }
+
+    // ── OverrideService test-helper tests ──────────────────────────────────────
+
+    private sealed class FakeOrderService : IOrderService
+    {
+        public string GetStatus() => "fake";
+    }
+
+    [Fact]
+    public void OverrideService_WithImplementationType_ReplacesExistingRegistration()
+    {
+        var services = new ServiceCollection();
+        services.AddAutoWireServices();
+        services.OverrideService<IOrderService, FakeOrderService>();
+
+        using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+        var svc = scope.ServiceProvider.GetService<IOrderService>();
+        Assert.IsType<FakeOrderService>(svc);
+        Assert.Equal(1, services.Count(d => d.ServiceType == typeof(IOrderService)));
+    }
+
+    [Fact]
+    public void OverrideService_WithInstance_ReplacesExistingRegistrationWithSingletonInstance()
+    {
+        var services = new ServiceCollection();
+        services.AddAutoWireServices();
+        var instance = new FakeOrderService();
+        services.OverrideService<IOrderService>(instance);
+
+        using var provider = services.BuildServiceProvider();
+        var svc = provider.GetService<IOrderService>();
+        Assert.Same(instance, svc);
+        Assert.Equal(1, services.Count(d => d.ServiceType == typeof(IOrderService)));
+    }
 }
