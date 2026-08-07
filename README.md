@@ -4,6 +4,7 @@
 [![NuGet Downloads](https://img.shields.io/nuget/dt/AutoWire.svg)](https://www.nuget.org/packages/AutoWire/)
 [![CI](https://github.com/Swevo/AutoWire/actions/workflows/build.yml/badge.svg)](https://github.com/Swevo/AutoWire/actions/workflows/build.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![.NET 10 Ready](https://img.shields.io/badge/.NET-10.0-512BD4?logo=dotnet)](#)
 
 **Compile-time dependency injection auto-registration for .NET** — add `[Scoped]`, `[Singleton]`, or `[Transient]` to your services and AutoWire generates the `IServiceCollection` registration code at build time.
 
