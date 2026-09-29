@@ -524,6 +524,32 @@ public class ReportArchiver : IReportArchiver { }
 // Often harmless (e.g. consumed by a separate assembly), but worth double-checking for dead code.
 ```
 
+### AW018 example (manual DI migration)
+
+```csharp
+// ℹ AW018 Info: Manual registration can be migrated to AutoWire attributes.
+services.AddScoped<IOrderService, OrderService>();
+```
+
+Recommended migration:
+
+```csharp
+[Scoped(typeof(IOrderService))]
+public class OrderService : IOrderService { }
+```
+
+Then remove the manual `AddScoped` line from startup.
+
+#### “Fix all” workflow
+
+When AW018 appears repeatedly in a file/project:
+
+1. Put cursor on an AW018 squiggle.
+2. Open quick actions (`Ctrl+.`).
+3. Apply **Add [AutoWire.*(...)] to implementation class**.
+4. Choose **Fix all occurrences in document** or **Fix all occurrences in project**.
+5. Remove now-redundant manual DI registrations from startup.
+
 ---
 
 ## Compile-time conditional — `Condition`
