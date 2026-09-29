@@ -12,3 +12,4 @@ AW014   | AutoWire | Error    | [ScanAssembly] marker must come from a reference
 AW015   | AutoWire | Warning  | [ScanAssembly] found no attributed services
 AW016   | AutoWire | Error    | Circular dependency detected between AutoWire-registered services
 AW017   | AutoWire | Info     | AutoWire registration appears unused
+AW018   | AutoWire | Info     | Manual IServiceCollection registration can be migrated to AutoWire

@@ -347,7 +347,7 @@ services.AddHostedService<global::DataSyncWorker>();
 
 ## Roslyn diagnostics
 
-AutoWire ships **seventeen built-in diagnostics** that surface problems **as squiggles in the IDE** — no runtime surprises.
+AutoWire ships **eighteen built-in diagnostics** that surface problems **as squiggles in the IDE** — no runtime surprises.
 
 | ID | Severity | Condition |
 |---|---|---|
@@ -368,6 +368,7 @@ AutoWire ships **seventeen built-in diagnostics** that surface problems **as squ
 | AW015 | ⚠ Warning | `[ScanAssembly]` resolved the assembly, but found **no AutoWire-attributed public services** in it |
 | AW016 | ❌ Error | **Circular dependency** detected between AutoWire-registered services' constructors |
 | AW017 | ℹ Info | An AutoWire-registered service **appears unused** anywhere in the compilation |
+| AW018 | ℹ Info | Manual `services.AddScoped/AddSingleton/AddTransient` call can be migrated to an AutoWire attribute |
 
 ### AW001 example
 
@@ -1248,6 +1249,22 @@ using AutoWire;
 
 File.WriteAllText("dependency-graph.mmd", AutoWireDependencyGraph.Mermaid);
 ```
+
+---
+
+## Diagnostics mode at startup
+
+`AddAutoWireServices` can emit a generated registration summary (and Mermaid graph text) at startup for observability:
+
+```csharp
+builder.Services.AddAutoWireServices(
+    diagnostics: true,
+    diagnosticsSink: line => logger.LogInformation("{Line}", line));
+```
+
+This outputs:
+- total/scoped/singleton/transient/module counts from `RegistrationSummary`
+- the compile-time `AutoWireDependencyGraph.Mermaid` content (when registrations exist)
 
 ---
 

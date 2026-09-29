@@ -1015,6 +1015,30 @@ public class DiagnosticTests
         Assert.DoesNotContain(diagnostics, d => d.Id == "AW017");
     }
 
+    // ── AW018: manual registration migration hints ───────────────────────────
+
+    [Fact]
+    public void AW018_ManualAddScoped_EmitsInfoDiagnostic()
+    {
+        var source = """
+            using Microsoft.Extensions.DependencyInjection;
+
+            public interface IOrdersService { }
+            public class OrdersService : IOrdersService { }
+
+            public static class Startup
+            {
+                public static void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IOrdersService, OrdersService>();
+                }
+            }
+            """;
+
+        var diagnostics = RunGenerator(source);
+        Assert.Contains(diagnostics, d => d.Id == "AW018" && d.Severity == DiagnosticSeverity.Info);
+    }
+
     // ── [Endpoint]: minimal API mapping ────────────────────────────────────────
 
     [Fact]
