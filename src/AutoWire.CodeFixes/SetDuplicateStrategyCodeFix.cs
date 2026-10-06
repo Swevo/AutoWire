@@ -12,7 +12,7 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 namespace AutoWire.CodeFixes;
 
 /// <summary>
-/// AW002 — Adds <c>Duplicate = DuplicateStrategy.Replace</c> or
+/// AW002/AW019 — Adds <c>Duplicate = DuplicateStrategy.Replace</c> or
 /// <c>Duplicate = DuplicateStrategy.Skip</c> to a registration attribute so the duplicate
 /// resolution intent is made explicit.
 /// </summary>
@@ -20,7 +20,7 @@ namespace AutoWire.CodeFixes;
 public sealed class SetDuplicateStrategyCodeFix : CodeFixProvider
 {
     private static readonly ImmutableArray<string> _fixableDiagnosticIds =
-        ImmutableArray.Create("AW002");
+        ImmutableArray.Create("AW002", "AW019");
 
     public override ImmutableArray<string> FixableDiagnosticIds => _fixableDiagnosticIds;
 

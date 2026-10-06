@@ -304,6 +304,110 @@ public class DiagnosticTests
         Assert.DoesNotContain(diagnostics, d => d.Id == "AW007");
     }
 
+    // ── AW019: duplicate keyed registration ───────────────────────────────────
+
+    [Fact]
+    public void AW019_MultipleKeyedRegistrationsUsingSameServiceAndKey_EmitsInfo()
+    {
+        var source = """
+            public interface IPaymentProvider { }
+            [AutoWire.Scoped(typeof(IPaymentProvider), Key = "stripe")]
+            public class StripeProviderV1 : IPaymentProvider { }
+            [AutoWire.Scoped(typeof(IPaymentProvider), Key = "stripe")]
+            public class StripeProviderV2 : IPaymentProvider { }
+            """;
+
+        var diagnostics = RunGenerator(source);
+        var diagnostic = Assert.Single(diagnostics, d => d.Id == "AW019");
+        Assert.NotEqual(Location.None, diagnostic.Location);
+    }
+
+    [Fact]
+    public void AW019_MultipleKeyedRegistrationsUsingDifferentKeys_NoWarning()
+    {
+        var source = """
+            public interface IPaymentProvider { }
+            [AutoWire.Scoped(typeof(IPaymentProvider), Key = "stripe")]
+            public class StripeProvider : IPaymentProvider { }
+            [AutoWire.Scoped(typeof(IPaymentProvider), Key = "adyen")]
+            public class AdyenProvider : IPaymentProvider { }
+            """;
+
+        var diagnostics = RunGenerator(source);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "AW019");
+    }
+
+    [Fact]
+    public void AW002_MultipleNonKeyedRegistrationsForSameService_EmitsInfoAtSourceLocation()
+    {
+        var source = """
+            public interface IHandler { }
+            [AutoWire.Scoped(typeof(IHandler))]
+            public class FirstHandler : IHandler { }
+            [AutoWire.Scoped(typeof(IHandler))]
+            public class SecondHandler : IHandler { }
+            """;
+
+        var diagnostics = RunGenerator(source);
+        var diagnostic = Assert.Single(diagnostics, d => d.Id == "AW002");
+        Assert.NotEqual(Location.None, diagnostic.Location);
+    }
+
+    [Fact]
+    public void AW022_RuntimeConditionWithEmptyConfigPayload_EmitsError()
+    {
+        var source = """
+            public interface IFeatureFlagService { }
+            [AutoWire.Scoped(typeof(IFeatureFlagService), Condition = "config:")]
+            public class FeatureFlagService : IFeatureFlagService { }
+            """;
+
+        var diagnostics = RunGenerator(source);
+        var diagnostic = Assert.Single(diagnostics, d => d.Id == "AW022");
+        Assert.NotEqual(Location.None, diagnostic.Location);
+    }
+
+    [Fact]
+    public void RuntimeCondition_ValidConfigCondition_EmitsRuntimeCheck()
+    {
+        var source = """
+            public interface IFeatureFlagService { }
+            [AutoWire.Scoped(typeof(IFeatureFlagService), Condition = "config:Features:Flag=on")]
+            public class FeatureFlagService : IFeatureFlagService { }
+            """;
+
+        var (_, sources) = RunGeneratorWithSources(source);
+        var code = sources.First(s => s.HintName.Contains("ServiceCollectionExtensions")).SourceText.ToString();
+        Assert.Contains("configuration?[\"Features:Flag\"]", code);
+        Assert.DoesNotContain("#if config:Features:Flag=on", code);
+    }
+
+    [Fact]
+    public void AW024_ProfileWhitespace_EmitsWarning()
+    {
+        var source = """
+            public interface IUserService { }
+            [AutoWire.Scoped(typeof(IUserService), Profile = "   ")]
+            public class UserService : IUserService { }
+            """;
+
+        var diagnostics = RunGenerator(source);
+        Assert.Contains(diagnostics, d => d.Id == "AW024");
+    }
+
+    [Fact]
+    public void AW025_ModuleAndProfile_EmitsWarning()
+    {
+        var source = """
+            public interface ICheckoutService { }
+            [AutoWire.Scoped(typeof(ICheckoutService), Module = "Payments", Profile = "prod")]
+            public class CheckoutService : ICheckoutService { }
+            """;
+
+        var diagnostics = RunGenerator(source);
+        Assert.Contains(diagnostics, d => d.Id == "AW025");
+    }
+
     // ── [HttpClient] generated code ───────────────────────────────────────────
 
     [Fact]
@@ -479,6 +583,9 @@ public class DiagnosticTests
         Assert.Contains("ScopedCount = 1", summary);
         Assert.Contains("SingletonCount = 1", summary);
         Assert.Contains("class RegistrationSummary", summary);
+        Assert.Contains("RegistrationManifestEntries", summary);
+        Assert.Contains("DecoratorManifestEntries", summary);
+        Assert.Contains("RegistrationManifestJson", summary);
     }
 
     // ── AW009: scoped dependency in HostedService ────────────────────────────
@@ -671,6 +778,55 @@ public class DiagnosticTests
         var diagnostics = RunGenerator(source);
         Assert.Contains(diagnostics, d => d.Id == "AW012");
         Assert.DoesNotContain(diagnostics, d => d.Id == "AW003");
+    }
+
+    [Fact]
+    public void AW020_DecoratorsWithSameServiceLifetimeAndOrder_EmitsWarning()
+    {
+        var source = """
+            public interface IFoo { string Value(); }
+            [AutoWire.Scoped]
+            public class Foo : IFoo { public string Value() => "ok"; }
+
+            [AutoWire.DecorateScoped(typeof(IFoo), Order = 1)]
+            public class FooDecoratorA : IFoo
+            {
+                private readonly IFoo _inner;
+                public FooDecoratorA(IFoo inner) { _inner = inner; }
+                public string Value() => _inner.Value();
+            }
+
+            [AutoWire.DecorateScoped(typeof(IFoo), Order = 1)]
+            public class FooDecoratorB : IFoo
+            {
+                private readonly IFoo _inner;
+                public FooDecoratorB(IFoo inner) { _inner = inner; }
+                public string Value() => _inner.Value();
+            }
+            """;
+
+        var diagnostics = RunGenerator(source);
+        Assert.Contains(diagnostics, d => d.Id == "AW020");
+    }
+
+    [Fact]
+    public void AW021_OpenGenericDecoratorTarget_EmitsError()
+    {
+        var source = """
+            public interface IRepository<T> { }
+            [AutoWire.Scoped]
+            public class Repository<T> : IRepository<T> { }
+
+            [AutoWire.DecorateScoped(typeof(IRepository<>))]
+            public class RepositoryDecorator<T> : IRepository<T>
+            {
+                private readonly IRepository<T> _inner;
+                public RepositoryDecorator(IRepository<T> inner) { _inner = inner; }
+            }
+            """;
+
+        var diagnostics = RunGenerator(source);
+        Assert.Contains(diagnostics, d => d.Id == "AW021");
     }
 
     // ── AW013: missing registration detection ─────────────────────────────────
@@ -1039,6 +1195,26 @@ public class DiagnosticTests
         Assert.Contains(diagnostics, d => d.Id == "AW018" && d.Severity == DiagnosticSeverity.Info);
     }
 
+    [Fact]
+    public void AW026_ScrutorScan_EmitsInfoDiagnostic()
+    {
+        var scrutorStub = CreateScrutorStub();
+        var source = """
+            using Microsoft.Extensions.DependencyInjection;
+
+            public static class Startup
+            {
+                public static void ConfigureServices(IServiceCollection services)
+                {
+                    services.Scan(_ => { });
+                }
+            }
+            """;
+
+        var diagnostics = RunGenerator(source, scrutorStub);
+        Assert.Contains(diagnostics, d => d.Id == "AW026" && d.Severity == DiagnosticSeverity.Info);
+    }
+
     // ── [Endpoint]: minimal API mapping ────────────────────────────────────────
 
     [Fact]
@@ -1132,6 +1308,18 @@ public class DiagnosticTests
         namespace Microsoft.AspNetCore.Routing
         {
             public interface IEndpointRouteBuilder { }
+        }
+        """);
+
+    private static MetadataReference CreateScrutorStub() => CreateReferencedAssembly(
+        "Scrutor",
+        """
+        namespace Microsoft.Extensions.DependencyInjection
+        {
+            public static class ServiceCollectionExtensions
+            {
+                public static IServiceCollection Scan(this IServiceCollection services, System.Action<object> action) => services;
+            }
         }
         """);
 

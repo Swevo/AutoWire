@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.25.0] — 2026-10-06
+
+### Added
+- **Runtime configuration conditions** for `Condition`:
+  - `config:Section:Key=Value` compares against `IConfiguration["Section:Key"]` (case-insensitive).
+  - `config:Section:Key` is shorthand for `=true`.
+  - Applied consistently in generated main, profile, and module registration methods.
+- **AW022 diagnostic (Warning)** — invalid `config:` runtime condition format.
+- **AW023 diagnostic (Warning)** — runtime `config:` condition used when `IConfiguration` support is unavailable.
+- **AW024 diagnostic (Warning)** — `Profile` is empty/whitespace and therefore only activates on `profile: ""`.
+- **AW025 diagnostic (Warning)** — registration combines `Module` and `Profile`; module methods currently ignore profile gating.
+- **AW026 diagnostic (Info)** — detects Scrutor `services.Scan(...)` usage and suggests migration to AutoWire attributes / `[AutoWireScan]`.
+- **AW026 code fix** — scaffolds migration by replacing Scrutor `Scan()` calls with `AddAutoWireServices()` plus inline parity-check guidance.
+- **Migration tooling scripts**:
+  - `tools/migrate-scrutor.ps1` — one-command migration for common and multi-chain Scan patterns (including `AsImplementedInterfaces`/`AsSelf`/`As<T>`) with before/after + unsupported report sections.
+  - `tools/compare-autowire-manifests.ps1` — CI-friendly deterministic manifest diff report.
+  - `tools/run-scrutor-comparison.ps1` — repeatable benchmark run + summary export.
+- **Semantic migration CLI**:
+  - `tools/AutoWire.Migrator` (Roslyn-based) for complex scan-chain analysis, confidence classification (`AutoConverted`/`NeedsReview`/`Manual`), JSON+markdown reports, and patch bundle generation.
+- **Deterministic manifest enhancements**:
+  - Registration summary now includes `RegistrationManifestEntries`, `DecoratorManifestEntries`, and `RegistrationManifestJson` with `kind` metadata and registration/decorator data suitable for CI diffing.
+  - Registration manifest rows/JSON now include `condition` metadata.
+
+### Changed
+- **Decorator safety diagnostics**:
+  - **AW020** warns on duplicate decorator order collisions for the same service/lifetime tuple.
+  - **AW021** errors on open-generic decorator targets (unsupported).
+- **Duplicate diagnostics quality**:
+  - **AW019** keyed-duplicate diagnostics and AW002/AW019 source locations now resolve to concrete source locations instead of `Location.None`.
+
+---
+
+## [1.24.0] — 2026-09-30
+
+### Added
+- **Startup diagnostics mode** on `AddAutoWireServices(diagnostics: true, diagnosticsSink: ...)` to emit registration summary counters and dependency-graph text.
+- **AW018 diagnostic/code fix** for manual DI registration migration (`AddScoped`/`AddSingleton`/`AddTransient` and related patterns) to AutoWire attributes.
+
+---
+
 ## [1.23.0] — 2026-06-26
 
 ### Added

@@ -235,6 +235,14 @@ public class DebugInfoService : IDebugService
     public string GetInfo() => "debug-info";
 }
 
+public interface IRuntimeFlagService { string Value(); }
+
+[Scoped(Condition = "config:Features:RuntimeFlag=enabled")]
+public class RuntimeFlagService : IRuntimeFlagService
+{
+    public string Value() => "runtime-enabled";
+}
+
 // ── IncludeLazy: registers Lazy<T> alongside the main registration ─────────────
 
 public interface IHeavyService { string Load(); }

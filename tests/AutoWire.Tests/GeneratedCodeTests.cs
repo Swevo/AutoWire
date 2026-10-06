@@ -498,6 +498,40 @@ public class GeneratedCodeTests
 #endif
     }
 
+    [Fact]
+    public void Conditional_RuntimeConfig_ServiceRegistersWhenConditionMatches()
+    {
+        var config = new FakeConfiguration(new()
+        {
+            ["Features:RuntimeFlag"] = "enabled"
+        });
+
+        var services = new ServiceCollection();
+        services.AddAutoWireServices(configuration: config);
+        using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+
+        var svc = scope.ServiceProvider.GetService<IRuntimeFlagService>();
+        Assert.NotNull(svc);
+        Assert.IsType<RuntimeFlagService>(svc);
+    }
+
+    [Fact]
+    public void Conditional_RuntimeConfig_ServiceSkippedWhenConditionDoesNotMatch()
+    {
+        var config = new FakeConfiguration(new()
+        {
+            ["Features:RuntimeFlag"] = "disabled"
+        });
+
+        var services = new ServiceCollection();
+        services.AddAutoWireServices(configuration: config);
+        using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+
+        Assert.Null(scope.ServiceProvider.GetService<IRuntimeFlagService>());
+    }
+
     // ── IncludeLazy tests ──────────────────────────────────────────────────────
 
     [Fact]
@@ -677,6 +711,37 @@ public class GeneratedCodeTests
     public void Summary_RegisteredImplementationsNotEmpty()
     {
         Assert.NotEmpty(AutoWire.RegistrationSummary.RegisteredImplementations);
+    }
+
+    [Fact]
+    public void Summary_RegistrationManifestEntriesNotEmpty()
+    {
+        Assert.NotEmpty(AutoWire.RegistrationSummary.RegistrationManifestEntries);
+    }
+
+    [Fact]
+    public void Summary_RegistrationManifestJsonContainsKnownService()
+    {
+        Assert.False(string.IsNullOrWhiteSpace(AutoWire.RegistrationSummary.RegistrationManifestJson));
+        Assert.Contains("\"service\":\"IOrderService\"", AutoWire.RegistrationSummary.RegistrationManifestJson);
+    }
+
+    [Fact]
+    public void Summary_DecoratorManifestEntriesContainKnownDecorator()
+    {
+        Assert.Contains(AutoWire.RegistrationSummary.DecoratorManifestEntries, entry => entry.Contains("PoliteGreeter"));
+    }
+
+    [Fact]
+    public void Summary_RegistrationManifestJsonContainsDecoratorEntries()
+    {
+        Assert.Contains("\"kind\":\"decorator\"", AutoWire.RegistrationSummary.RegistrationManifestJson);
+    }
+
+    [Fact]
+    public void Summary_RegistrationManifestJsonContainsConditionField()
+    {
+        Assert.Contains("\"condition\":\"", AutoWire.RegistrationSummary.RegistrationManifestJson);
     }
 
     // ── ConfigKey runtime lifetime override tests ──────────────────────────────

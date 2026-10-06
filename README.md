@@ -166,7 +166,7 @@ All attributes (except `[HostedService]` and `[Factory]`) support these shared p
 | `Duplicate` | `DuplicateStrategy` | `Add` / `Skip` / `Replace` |
 | `IncludeSelf` | `bool` | Also register as concrete type |
 | `Profile` | `string?` | Only register when profile matches |
-| `Condition` | `string?` | Wrap in `#if SYMBOL ... #endif` at compile time |
+| `Condition` | `string?` | Conditional registration gate. `SYMBOL` uses compile-time `#if`; `config:Key=Value` uses runtime configuration matching (case-insensitive) |
 | `IncludeLazy` | `bool` | Also register `Lazy<T>` via `AddTransient` |
 | `Module` | `string?` | Place service in a named module — excluded from `AddAutoWireServices()`, gets its own `Add{Module}Module()` method |
 | `ConfigKey` | `string?` | Resolve the lifetime at runtime from `configuration["AutoWire:Lifetime:" + ConfigKey]` (`"Scoped"`/`"Singleton"`/`"Transient"`, case-insensitive), falling back to the attribute's declared lifetime when absent/unrecognized. Only applies to the six registration attributes (`Scoped`/`Singleton`/`Transient`/`Try*`). Requires an `IConfiguration? configuration = null` parameter on the generated `AddAutoWireServices()` (added automatically when your project references `Microsoft.Extensions.Configuration.Abstractions`) |
@@ -347,7 +347,7 @@ services.AddHostedService<global::DataSyncWorker>();
 
 ## Roslyn diagnostics
 
-AutoWire ships **eighteen built-in diagnostics** that surface problems **as squiggles in the IDE** — no runtime surprises.
+AutoWire ships **twenty-six built-in diagnostics** that surface problems **as squiggles in the IDE** — no runtime surprises.
 
 | ID | Severity | Condition |
 |---|---|---|
@@ -369,6 +369,14 @@ AutoWire ships **eighteen built-in diagnostics** that surface problems **as squi
 | AW016 | ❌ Error | **Circular dependency** detected between AutoWire-registered services' constructors |
 | AW017 | ℹ Info | An AutoWire-registered service **appears unused** anywhere in the compilation |
 | AW018 | ℹ Info | Manual `services.AddScoped/AddSingleton/AddTransient` call can be migrated to an AutoWire attribute |
+| AW019 | ℹ Info | **Multiple keyed** `Add`-strategy registrations for the same service type and key |
+| AW020 | ⚠ Warning | Multiple decorators target the same service/lifetime with the **same `Order`** — deterministic fallback applies, but intent may be ambiguous |
+| AW021 | ❌ Error | `[Decorate*]` targets an **open generic** service type — currently unsupported |
+| AW022 | ⚠ Warning | `Condition` uses `config:` but has an invalid format (use `config:Section:Key` or `config:Section:Key=Value`) |
+| AW023 | ⚠ Warning | Runtime `config:` condition used without `IConfiguration` support in the consuming compilation |
+| AW024 | ⚠ Warning | `Profile` is empty/whitespace, making activation depend on `AddAutoWireServices(profile: "")` |
+| AW025 | ⚠ Warning | Registration combines `Module` and `Profile`; module methods currently ignore profile gating |
+| AW026 | ℹ Info | Scrutor `services.Scan(...)` usage can be migrated to AutoWire attributes / `[AutoWireScan]` |
 
 ### AW001 example
 
@@ -552,9 +560,13 @@ When AW018 appears repeatedly in a file/project:
 
 ---
 
-## Compile-time conditional — `Condition`
+## Conditional registrations — `Condition`
 
-Use `Condition` to gate a registration behind a preprocessor symbol. AutoWire wraps the generated line(s) in `#if ... #endif`:
+Use `Condition` to gate a registration either at compile time (preprocessor symbol) or at runtime (configuration key/value match).
+
+### Compile-time symbol conditions
+
+When `Condition` is a symbol (for example `DEBUG`), AutoWire wraps generated line(s) in `#if ... #endif`:
 
 ```csharp
 // Only registered in DEBUG builds
@@ -585,6 +597,30 @@ services.AddSingleton<ICacheService, RedisCache>();
 public class StagingMockService : IMyService { }
 // → only registered when profile == "staging" AND DEBUG is defined
 ```
+
+### Runtime configuration conditions
+
+When `Condition` starts with `config:`, AutoWire emits a runtime guard against `IConfiguration`:
+
+```csharp
+[Scoped(Condition = "config:Features:UseMockEmail=true")]
+public class RuntimeMockEmailService : IEmailService { }
+```
+
+Generated output:
+
+```csharp
+if (StringComparer.OrdinalIgnoreCase.Equals(configuration?["Features:UseMockEmail"], "true"))
+{
+    services.AddScoped<IEmailService, RuntimeMockEmailService>();
+}
+```
+
+Rules:
+- `config:Key=Value` compares `configuration["Key"]` to `Value` (case-insensitive).
+- `config:Key` is shorthand for `config:Key=true`.
+- Invalid `config:` conditions emit **AW022**.
+- If configuration support is unavailable in the consuming project, runtime conditions emit **AW023**.
 
 ---
 
@@ -1196,6 +1232,9 @@ public static IServiceCollection AddPaymentsModule(this IServiceCollection servi
 }
 ```
 
+> ⚠ `Profile` gating is evaluated in `AddAutoWireServices(profile: ...)`, not inside generated module methods.  
+> If a registration sets both `Module` and `Profile`, AutoWire emits **AW025** to highlight that profile gating is ignored for `Add{Module}Module()`.
+
 ### When to use modules
 
 - **Feature flags** — ship code for a feature but only activate it when the module is registered
@@ -1262,7 +1301,22 @@ logger.LogInformation(
     RegistrationSummary.TransientCount);
 ```
 
-Available constants: `TotalCount` · `ScopedCount` · `SingletonCount` · `TransientCount` · `HostedServiceCount` · `FactoryCount` · `HttpClientCount` · `ModuleServiceCount` · `RegisteredImplementations` (string array).
+Available constants: `TotalCount` · `ScopedCount` · `SingletonCount` · `TransientCount` · `HostedServiceCount` · `FactoryCount` · `HttpClientCount` · `ModuleServiceCount` · `RegisteredImplementations` (string array) · `RegistrationManifestEntries` (deterministic string array) · `DecoratorManifestEntries` (deterministic decorator chain string array) · `RegistrationManifestJson` (deterministic JSON string with registration + decorator entries).
+
+---
+
+## Registration manifest export — `RegistrationSummary.RegistrationManifest*`
+
+AutoWire now emits a deterministic registration manifest for CI/release diffing:
+
+```csharp
+using AutoWire;
+
+File.WriteAllLines("autowire-registrations.txt", RegistrationSummary.RegistrationManifestEntries);
+File.WriteAllText("autowire-registrations.json", RegistrationSummary.RegistrationManifestJson);
+```
+
+`RegistrationManifestEntries` is designed for human diff readability, while `RegistrationManifestJson` is stable for tooling.
 
 ---
 
@@ -1353,7 +1407,7 @@ app.Run();
 
 ## Roslyn code fix providers
 
-AutoWire ships **IDE light-bulb fixes** for four diagnostics — click the squiggle, press `Alt+Enter`, and the fix is applied automatically:
+AutoWire ships **IDE light-bulb fixes** for migration and safety diagnostics — click the squiggle, press `Alt+Enter`, and the fix is applied automatically:
 
 | Diagnostic | Fix |
 |---|---|
@@ -1361,6 +1415,8 @@ AutoWire ships **IDE light-bulb fixes** for four diagnostics — click the squig
 | AW003 — ServiceType not implemented | *Remove the explicit ServiceType argument* |
 | AW006 — Transient disposable | *Change `[Transient]` → `[Scoped]`* |
 | AW009 — Scoped in HostedService | *Replace with `IServiceScopeFactory` (rewrites constructor + adds private field)* |
+| AW018 — Manual DI registration can be migrated | *Add corresponding `[AutoWire.*]` attribute to implementation type* |
+| AW026 — Scrutor Scan can be migrated | *Replace `Scan()` call with `AddAutoWireServices()` migration scaffold + parity note* |
 
 ---
 
@@ -1403,6 +1459,92 @@ public static partial class ServiceCollectionExtensions
 | **AutoWire** | Source generator | **None** | ✅ |
 
 AutoWire differs from Scrutor in that registration happens **at compile time** — there is no assembly scanning, no reflection, and no startup cost. That also makes AutoWire **Native AOT-friendly**, whereas Scrutor-style runtime scanning is not. It also differs from Scrutor's convention-based scanning in that intent is expressed directly on the class, making it easy to understand what is registered without reading `Startup.cs`.
+
+For a reproducible side-by-side comparison workflow (including benchmark commands and migration parity checks), see [`SCRUTOR-COMPARISON.md`](SCRUTOR-COMPARISON.md).
+
+---
+
+## Migrating from Scrutor
+
+AutoWire supports phased migration from Scrutor; you can run both during transition and move feature-by-feature.
+
+### Concept mapping
+
+| Scrutor pattern | AutoWire equivalent |
+|---|---|
+| `services.Scan(...).AddClasses().AsImplementedInterfaces().WithScopedLifetime()` | Add `[Scoped]` on implementation classes (or `[assembly: AutoWireScan(...)]` for namespace convention scanning) |
+| `WithSingletonLifetime()` / `WithTransientLifetime()` | `[Singleton]` / `[Transient]` |
+| `AsSelf()` | `IncludeSelf = true` |
+| Multiple assemblies in scan | `[assembly: ScanAssembly(typeof(SomeMarker))]` and/or `[assembly: AutoWireScan(..., AssemblyOf = ...)]` |
+| Decorate pipelines | `[DecorateScoped]` / `[DecorateSingleton]` / `[DecorateTransient]` + `Order` |
+
+### Safety checks during migration
+
+- **AW018** flags manual `AddScoped`/`AddSingleton`/`AddTransient` registrations that can be migrated.
+- **AW026** flags Scrutor `services.Scan(...)` calls that can be migrated to AutoWire.
+- Use `RegistrationSummary.RegistrationManifestEntries` / `RegistrationManifestJson` to diff registrations in CI before/after migration.
+
+### One-command migration path
+
+AutoWire now includes a migration script for common Scrutor scan shapes:
+
+```powershell
+pwsh .\tools\migrate-scrutor.ps1 -Path . -ReportPath .\autowire-scrutor-migration-report.md
+```
+
+What it does:
+- converts common `services.Scan(...).AddClasses().AsImplementedInterfaces().With*Lifetime()` blocks to an AutoWire scaffold,
+- supports multi-chain scans (multiple `AddClasses(...)` blocks) and mapping metadata for `AsImplementedInterfaces`, `AsSelf`, and `As<T>/As(typeof(...))`,
+- writes a **before/after** section for each converted block,
+- writes a **“could not convert”** section for unsupported scan patterns.
+
+Preview-only mode:
+
+```powershell
+pwsh .\tools\migrate-scrutor.ps1 -Path . -WhatIf
+```
+
+For deeper/complex scan-chain handling, use the semantic migrator (Roslyn-based):
+
+```powershell
+dotnet run --project .\tools\AutoWire.Migrator\AutoWire.Migrator.csproj -- `
+  --path . `
+  --apply `
+  --report-json .\autowire-semantic-migration-report.json `
+  --report-md .\autowire-semantic-migration-report.md `
+  --patch-dir .\autowire-migration-patches
+```
+
+This adds confidence classification per chain (`AutoConverted`, `NeedsReview`, `Manual`) and emits machine-readable reports + patch bundles.
+
+### CI parity report for registration manifests
+
+Generate a deterministic manifest diff report in CI:
+
+```powershell
+pwsh .\tools\compare-autowire-manifests.ps1 `
+  -Baseline .\baseline\autowire-registrations.txt `
+  -Candidate .\current\autowire-registrations.txt `
+  -ReportPath .\autowire-manifest-diff.md
+```
+
+This report lists added/removed registrations so migration drift is explicit in PRs.
+
+### Repeatable Scrutor vs AutoWire benchmark run
+
+```powershell
+pwsh .\tools\run-scrutor-comparison.ps1
+```
+
+This runs the benchmark project and writes a markdown summary under `BenchmarkDotNet.Artifacts`, giving repeatable startup/registration comparisons in one command.
+
+### Recommended rollout
+
+1. Start with one module/namespace and add AutoWire attributes.
+2. Keep Scrutor for untouched areas.
+3. Compare registration manifests in CI for parity.
+4. Remove Scrutor scan blocks as each area reaches parity.
+5. Use AW018/AW026 fix-alls and code actions in the IDE to reduce manual migration churn.
 
 ---
 
@@ -1498,7 +1640,7 @@ AW003 catches it at compile time with a build error. `[Scoped(typeof(IFoo))]` on
 AW012 catches that at compile time. `[DecorateScoped(typeof(IFoo))]` on a class that does not implement `IFoo` is a build error.
 
 **Q: What if I have two services implementing the same interface?**
-AutoWire registers each independently and emits an AW002 info diagnostic. Use `DuplicateStrategy.Replace` to make the winner explicit, `DuplicateStrategy.Skip` to keep the first, or keyed services to disambiguate.
+AutoWire registers each independently and emits an AW002 info diagnostic for non-keyed duplicates. For keyed duplicates with the same service+key pair, AutoWire emits AW019. Use `DuplicateStrategy.Replace` to make the winner explicit, `DuplicateStrategy.Skip` to keep the first, or keyed services with distinct keys to disambiguate.
 
 **Q: Can I register different implementations per environment (e.g. Production vs Testing)?**
 Yes — use `Profile`: `[Scoped(Profile = "production")]`. Call `AddAutoWireServices(profile: "production")` to activate profile-specific services alongside unprofiled ones. Services with no `Profile` are always registered regardless.

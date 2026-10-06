@@ -1,5 +1,7 @@
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Text;
 
 namespace AutoWire;
 
@@ -32,6 +34,10 @@ internal sealed class RegistrationInfo
     /// <see cref="Lifetime"/> when the key is absent or unrecognized.
     /// </summary>
     public string? ConfigKey { get; }
+    public string SourceFilePath { get; }
+    public TextSpan SourceSpan { get; }
+    public LinePositionSpan SourceLineSpan { get; }
+    public bool HasSourceLocation { get; }
 
     public RegistrationInfo(
         string implementationType,
@@ -46,7 +52,8 @@ internal sealed class RegistrationInfo
         string? condition = null,
         bool includeLazy = false,
         string? module = null,
-        string? configKey = null)
+        string? configKey = null,
+        Location? sourceLocation = null)
     {
         ImplementationType = implementationType;
         ServiceTypes = serviceTypes;
@@ -61,6 +68,12 @@ internal sealed class RegistrationInfo
         IncludeLazy = includeLazy;
         Module = module;
         ConfigKey = configKey;
+
+        var mapped = sourceLocation?.GetLineSpan();
+        SourceFilePath = mapped?.Path ?? string.Empty;
+        SourceSpan = sourceLocation?.SourceSpan ?? default;
+        SourceLineSpan = mapped?.Span ?? default;
+        HasSourceLocation = sourceLocation is not null && sourceLocation != Location.None;
     }
 
     public override bool Equals(object? obj) =>
@@ -77,7 +90,10 @@ internal sealed class RegistrationInfo
         Condition == other.Condition &&
         IncludeLazy == other.IncludeLazy &&
         Module == other.Module &&
-        ConfigKey == other.ConfigKey;
+        ConfigKey == other.ConfigKey &&
+        SourceFilePath == other.SourceFilePath &&
+        SourceSpan.Equals(other.SourceSpan) &&
+        HasSourceLocation == other.HasSourceLocation;
 
     public override int GetHashCode()
     {
@@ -95,11 +111,19 @@ internal sealed class RegistrationInfo
             h = h * 397 ^ IncludeLazy.GetHashCode();
             h = h * 397 ^ (Module?.GetHashCode() ?? 0);
             h = h * 397 ^ (ConfigKey?.GetHashCode() ?? 0);
+            h = h * 397 ^ (SourceFilePath?.GetHashCode() ?? 0);
+            h = h * 397 ^ SourceSpan.GetHashCode();
+            h = h * 397 ^ HasSourceLocation.GetHashCode();
             foreach (var s in ServiceTypes)
                 h = h * 397 ^ s.GetHashCode();
             return h;
         }
     }
+
+    public Location GetLocation() =>
+        !HasSourceLocation
+            ? Location.None
+            : Location.Create(SourceFilePath, SourceSpan, SourceLineSpan);
 
     private static bool SequenceEqual(ImmutableArray<string> a, ImmutableArray<string> b)
     {
