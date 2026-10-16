@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `tools/run-scrutor-comparison.ps1` — repeatable benchmark run + summary export.
 - **Semantic migration CLI**:
   - `tools/AutoWire.Migrator` (Roslyn-based) for complex scan-chain analysis, confidence classification (`AutoConverted`/`NeedsReview`/`Manual`), JSON+markdown reports, and patch bundle generation.
+  - Now includes Scrutor `Decorate(...)` chain analysis, registration-strategy extraction, richer `As*`/lifetime detection, and CI threshold gating (`--fail-on-threshold`, `--max-manual`, `--max-needs-review`).
 - **Deterministic manifest enhancements**:
   - Registration summary now includes `RegistrationManifestEntries`, `DecoratorManifestEntries`, and `RegistrationManifestJson` with `kind` metadata and registration/decorator data suitable for CI diffing.
   - Registration manifest rows/JSON now include `condition` metadata.

@@ -1517,6 +1517,16 @@ dotnet run --project .\tools\AutoWire.Migrator\AutoWire.Migrator.csproj -- `
 
 This adds confidence classification per chain (`AutoConverted`, `NeedsReview`, `Manual`) and emits machine-readable reports + patch bundles.
 
+It also analyzes Scrutor `Decorate(...)` chains and can enforce CI gates:
+
+```powershell
+dotnet run --project .\tools\AutoWire.Migrator\AutoWire.Migrator.csproj -- `
+  --path . `
+  --fail-on-threshold `
+  --max-manual 0 `
+  --max-needs-review 5
+```
+
 ### CI parity report for registration manifests
 
 Generate a deterministic manifest diff report in CI:
