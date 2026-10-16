@@ -4,6 +4,11 @@ using System.Text.RegularExpressions;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
+if (args.Length > 0 && args[0] is "diff")
+    return ManifestDiff.Run(args[1..]);
+if (args.Length > 0 && args[0] is "migrate")
+    args = args[1..];
+
 var options = ParseArgs(args);
 if (options.ShowHelp)
 {
@@ -19,6 +24,32 @@ var files = Directory
 var scanAnalyses = new List<ScanAnalysis>();
 var decoratorAnalyses = new List<DecoratorAnalysis>();
 var changedFiles = new List<ChangedFile>();
+var registrationAnalyses = new List<RegistrationAnalysis>();
+var originals = new Dictionary<string, string>();
+
+{
+    var parsed = new Dictionary<string, (string Source, Microsoft.CodeAnalysis.SyntaxNode Root)>();
+    var convertible = new List<(string File, ExpressionStatementSyntax Stmt, RegistrationAnalysis Analysis)>();
+    foreach (var file in files)
+    {
+        var text = File.ReadAllText(file);
+        var rootNode = CSharpSyntaxTree.ParseText(text).GetRoot();
+        parsed[file] = (text, rootNode);
+        registrationAnalyses.AddRange(RegistrationMigration.Analyze(file, text, rootNode, out var found));
+        convertible.AddRange(found.Select(f => (file, f.Stmt, f.Analysis)));
+    }
+
+    if (options.Apply && convertible.Count > 0)
+    {
+        var edits = RegistrationMigration.BuildEdits(parsed, convertible, registrationAnalyses);
+        foreach (var group in edits.GroupBy(static e => e.FilePath))
+        {
+            var before = parsed[group.Key].Source;
+            File.WriteAllText(group.Key, RegistrationMigration.ApplyEdits(before, group));
+            originals[group.Key] = before;
+        }
+    }
+}
 
 foreach (var file in files)
 {
@@ -58,20 +89,29 @@ foreach (var file in files)
 
     var updated = ApplyReplacements(source, replacements);
     File.WriteAllText(file, updated);
-    changedFiles.Add(new ChangedFile(file, source, updated));
+    changedFiles.Add(new ChangedFile(file, originals.TryGetValue(file, out var original) ? original : source, updated));
+}
+
+foreach (var (path, before) in originals)
+{
+    if (changedFiles.Any(c => c.FilePath == path)) continue;
+    changedFiles.Add(new ChangedFile(path, before, File.ReadAllText(path)));
 }
 
 Directory.CreateDirectory(Path.GetDirectoryName(options.ReportJson)!);
 Directory.CreateDirectory(Path.GetDirectoryName(options.ReportMd)!);
 Directory.CreateDirectory(options.PatchDir);
 
-WriteJsonReport(options.ReportJson, scanAnalyses, decoratorAnalyses, changedFiles, options);
-WriteMarkdownReport(options.ReportMd, scanAnalyses, decoratorAnalyses, changedFiles, options);
+WriteJsonReport(options.ReportJson, scanAnalyses, decoratorAnalyses, registrationAnalyses, changedFiles, options);
+WriteMarkdownReport(options.ReportMd, scanAnalyses, decoratorAnalyses, registrationAnalyses, changedFiles, options);
 WritePatchBundle(options.PatchDir, changedFiles);
 
-var summary = Summarize(scanAnalyses, decoratorAnalyses, changedFiles);
+var summary = Summarize(scanAnalyses, decoratorAnalyses, registrationAnalyses, changedFiles);
 Console.WriteLine($"Analyzed Scan chains: {summary.ScanTotal}");
 Console.WriteLine($"Analyzed Decorate chains: {summary.DecoratorTotal}");
+Console.WriteLine($"Analyzed Autofac / Microsoft DI registrations: {summary.RegistrationTotal}");
+if (options.Apply && registrationAnalyses.Any(static r => r.Confidence == MigrationConfidence.AutoConverted))
+    Console.WriteLine("Remember to call services.AddAutoWireServices() where the removed registrations lived.");
 Console.WriteLine($"Changed files: {summary.ChangedFiles}");
 Console.WriteLine($"JSON report: {options.ReportJson}");
 Console.WriteLine($"Markdown report: {options.ReportMd}");
@@ -81,7 +121,7 @@ if (!string.IsNullOrWhiteSpace(options.BaselineManifest) && !string.IsNullOrWhit
 {
     Console.WriteLine("Manifest validation command:");
     Console.WriteLine(
-        $@"pwsh .\tools\compare-autowire-manifests.ps1 -Baseline ""{options.BaselineManifest}"" -Candidate ""{options.CandidateManifest}"" -ReportPath ""{options.ManifestDiffReport}""");
+        $@"autowire-migrate diff --baseline ""{options.BaselineManifest}"" --candidate ""{options.CandidateManifest}"" --report ""{options.ManifestDiffReport}""");
 }
 
 if (options.FailOnThreshold)
@@ -328,17 +368,19 @@ static void WriteJsonReport(
     string path,
     List<ScanAnalysis> scanAnalyses,
     List<DecoratorAnalysis> decoratorAnalyses,
+    List<RegistrationAnalysis> registrationAnalyses,
     List<ChangedFile> changedFiles,
     Options options)
 {
-    var summary = Summarize(scanAnalyses, decoratorAnalyses, changedFiles);
+    var summary = Summarize(scanAnalyses, decoratorAnalyses, registrationAnalyses, changedFiles);
     var report = new
     {
         generatedAtUtc = DateTime.UtcNow,
         mode = options.Apply ? "apply" : "analyze",
         summary,
         scans = scanAnalyses,
-        decorators = decoratorAnalyses
+        decorators = decoratorAnalyses,
+        registrations = registrationAnalyses
     };
 
     var json = JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true });
@@ -349,16 +391,18 @@ static void WriteMarkdownReport(
     string path,
     List<ScanAnalysis> scanAnalyses,
     List<DecoratorAnalysis> decoratorAnalyses,
+    List<RegistrationAnalysis> registrationAnalyses,
     List<ChangedFile> changedFiles,
     Options options)
 {
-    var summary = Summarize(scanAnalyses, decoratorAnalyses, changedFiles);
+    var summary = Summarize(scanAnalyses, decoratorAnalyses, registrationAnalyses, changedFiles);
     var sb = new StringBuilder();
-    sb.AppendLine("# AutoWire Semantic Scrutor Migration Report");
+    sb.AppendLine("# AutoWire Semantic Migration Report");
     sb.AppendLine();
     sb.AppendLine($"**Mode:** {(options.Apply ? "apply" : "analyze")}  ");
     sb.AppendLine($"**Scan chains:** {summary.ScanTotal}  ");
     sb.AppendLine($"**Decorator chains:** {summary.DecoratorTotal}  ");
+    sb.AppendLine($"**Autofac / Microsoft DI registrations:** {summary.RegistrationTotal}  ");
     sb.AppendLine($"**Auto-converted:** {summary.AutoConverted}  ");
     sb.AppendLine($"**Needs review:** {summary.NeedsReview}  ");
     sb.AppendLine($"**Manual:** {summary.Manual}  ");
@@ -386,21 +430,37 @@ static void WriteMarkdownReport(
         sb.AppendLine($"| `{d.FilePath}` | {d.Line} | {d.Style} | {d.Confidence} | {EscapePipe(notes)} |");
     }
 
+    sb.AppendLine();
+    sb.AppendLine("## Autofac / Microsoft DI registrations");
+    sb.AppendLine();
+    sb.AppendLine("| File | Line | Source | Confidence | Lifetime | Implementation | Suggested attribute | Notes |");
+    sb.AppendLine("|---|---:|---|---|---|---|---|---|");
+    foreach (var r in registrationAnalyses.OrderBy(static x => x.FilePath).ThenBy(static x => x.Line))
+    {
+        var notes = r.Reasons.Count == 0 ? "None" : string.Join("; ", r.Reasons);
+        var attr = r.SuggestedAttribute.Length == 0 ? "-" : $"`{r.SuggestedAttribute}`";
+        sb.AppendLine($"| `{r.FilePath}` | {r.Line} | {r.Source} | {r.Confidence} | {r.Lifetime} | `{r.ImplementationType}` | {EscapePipe(attr)} | {EscapePipe(notes)} |");
+    }
+
     File.WriteAllText(path, sb.ToString());
 }
 
 static string EscapePipe(string value) => value.Replace("|", "\\|");
 
-static Summary Summarize(List<ScanAnalysis> scans, List<DecoratorAnalysis> decorators, List<ChangedFile> changedFiles)
+static Summary Summarize(List<ScanAnalysis> scans, List<DecoratorAnalysis> decorators, List<RegistrationAnalysis> registrations, List<ChangedFile> changedFiles)
 {
-    var allConfidence = scans.Select(static s => s.Confidence).Concat(decorators.Select(static d => d.Confidence)).ToList();
+    var allConfidence = scans.Select(static s => s.Confidence)
+        .Concat(decorators.Select(static d => d.Confidence))
+        .Concat(registrations.Select(static r => r.Confidence))
+        .ToList();
     return new Summary(
         scans.Count,
         decorators.Count,
         allConfidence.Count(c => c == MigrationConfidence.AutoConverted),
         allConfidence.Count(c => c == MigrationConfidence.NeedsReview),
         allConfidence.Count(c => c == MigrationConfidence.Manual),
-        changedFiles.Count);
+        changedFiles.Count,
+        registrations.Count);
 }
 
 static void WritePatchBundle(string patchDir, List<ChangedFile> changedFiles)
@@ -467,7 +527,11 @@ static void PrintHelp()
 {
     Console.WriteLine("""
 Usage:
-  dotnet run --project tools/AutoWire.Migrator/AutoWire.Migrator.csproj -- [options]
+  autowire-migrate [migrate] [options]
+  autowire-migrate diff --baseline <file> --candidate <file> [--report <file>]
+
+Converts Scrutor Scan/Decorate chains, Autofac RegisterType chains and Microsoft DI
+AddScoped/AddSingleton/AddTransient calls to AutoWire attributes.
 
 Options:
   --path <dir>                  Root folder to analyze (default: .)
@@ -532,7 +596,8 @@ file sealed record Summary(
     int AutoConverted,
     int NeedsReview,
     int Manual,
-    int ChangedFiles);
+    int ChangedFiles,
+    int RegistrationTotal);
 
 file sealed record ChangedFile(string FilePath, string Before, string After);
 file sealed record Replacement(int Start, int Length, string NewText);

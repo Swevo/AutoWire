@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.26.0] — 2026-10-16
+
+### Added
+- **Open-generic decorators**: `[DecorateScoped(typeof(IRepo<>))] class Logging<T> : IRepo<T>` is closed at build time over every closed registration of `IRepo<...>`. New **AW027** warns when an open decorator matches nothing.
+- **Convention scanning of open-generic classes** (`[AutoWireScan]`) — registered as open generics; AW005 now also covers generic types.
+- `Swevo.AutoWire.Migrator` **dotnet tool** (`autowire-migrate`): Scrutor, **Autofac** and plain **Microsoft DI** migration to AutoWire attributes, confidence-rated reports, CI gates, plus `autowire-migrate diff` for registration manifests.
+
+### Changed
+- **Module + Profile**: `Add{Module}Module()` now accepts `string? profile = null` and gates profile-restricted registrations. **AW025 removed**.
+- AW021 now fires only when an open-generic decorator cannot be mapped onto its target.
+- AW013 no longer flags constructor parameters that are open-generic type parameters.
+
 ## [1.25.0] — 2026-10-06
 
 ### Added

@@ -371,11 +371,11 @@ AutoWire ships **twenty-six built-in diagnostics** that surface problems **as sq
 | AW018 | ℹ Info | Manual `services.AddScoped/AddSingleton/AddTransient` call can be migrated to an AutoWire attribute |
 | AW019 | ℹ Info | **Multiple keyed** `Add`-strategy registrations for the same service type and key |
 | AW020 | ⚠ Warning | Multiple decorators target the same service/lifetime with the **same `Order`** — deterministic fallback applies, but intent may be ambiguous |
-| AW021 | ❌ Error | `[Decorate*]` targets an **open generic** service type — currently unsupported |
+| AW021 | ❌ Error | `[Decorate*]` targets an **open generic** service type but the decorator cannot be mapped onto it (the decorator must be generic with type parameters that flow into the service type) |
 | AW022 | ⚠ Warning | `Condition` uses `config:` but has an invalid format (use `config:Section:Key` or `config:Section:Key=Value`) |
 | AW023 | ⚠ Warning | Runtime `config:` condition used without `IConfiguration` support in the consuming compilation |
 | AW024 | ⚠ Warning | `Profile` is empty/whitespace, making activation depend on `AddAutoWireServices(profile: "")` |
-| AW025 | ⚠ Warning | Registration combines `Module` and `Profile`; module methods currently ignore profile gating |
+| AW027 | ⚠ Warning | An open-generic `[Decorate*]` matched no closed registered service, so it has no effect |
 | AW026 | ℹ Info | Scrutor `services.Scan(...)` usage can be migrated to AutoWire attributes / `[AutoWireScan]` |
 
 ### AW001 example
@@ -709,7 +709,7 @@ AutoWire will scan every non-abstract class in that namespace (and sub-namespace
 - **Concrete, non-abstract classes** in the target namespace
 - Classes **without** an existing `[Scoped]`, `[Singleton]`, `[Transient]` etc. attribute (explicit always wins)
 - Classes **without** `[AutoWireExclude]`
-- Open-generic classes are **skipped** (they need an explicit registration)
+- Open-generic classes are registered as open generics (e.g. `Repo<T> : IRepo<T>` becomes `AddScoped(typeof(IRepo<>), typeof(Repo<>))`)
 
 ### Opting out
 
@@ -1232,8 +1232,7 @@ public static IServiceCollection AddPaymentsModule(this IServiceCollection servi
 }
 ```
 
-> ⚠ `Profile` gating is evaluated in `AddAutoWireServices(profile: ...)`, not inside generated module methods.  
-> If a registration sets both `Module` and `Profile`, AutoWire emits **AW025** to highlight that profile gating is ignored for `Add{Module}Module()`.
+> `Profile` gating also applies inside modules: when a module contains profile-restricted registrations, `Add{Module}Module()` gains an optional `string? profile = null` parameter (after `configuration` if present), e.g. `services.AddBillingModule(profile: "eu")`. Registrations without a `Profile` are always added.
 
 ### When to use modules
 
@@ -1504,42 +1503,31 @@ Preview-only mode:
 pwsh .\tools\migrate-scrutor.ps1 -Path . -WhatIf
 ```
 
-For deeper/complex scan-chain handling, use the semantic migrator (Roslyn-based):
+For deeper handling use the semantic migrator, shipped as the **`Swevo.AutoWire.Migrator`** dotnet tool:
 
-```powershell
-dotnet run --project .\tools\AutoWire.Migrator\AutoWire.Migrator.csproj -- `
-  --path . `
-  --apply `
-  --report-json .\autowire-semantic-migration-report.json `
-  --report-md .\autowire-semantic-migration-report.md `
-  --patch-dir .\autowire-migration-patches
+```bash
+dotnet tool install --global Swevo.AutoWire.Migrator
+
+autowire-migrate --path . --apply
 ```
 
-This adds confidence classification per chain (`AutoConverted`, `NeedsReview`, `Manual`) and emits machine-readable reports + patch bundles.
+It analyzes **Scrutor** `Scan(...)`/`Decorate(...)` chains, **Autofac** (`RegisterType<T>().As<I>().InstancePerLifetimeScope()`, `SingleInstance`, `RegisterGeneric`, `RegisterAssemblyTypes`, `RegisterDecorator`) and plain **Microsoft DI** (`AddScoped/AddSingleton/AddTransient`, generic and `typeof` forms). Each finding gets a confidence (`AutoConverted`, `NeedsReview`, `Manual`) and appears in JSON + Markdown reports and a patch bundle. With `--apply`, `AutoConverted` registrations are rewritten into `[AutoWire.Scoped(typeof(IFoo))]`-style attributes on the implementation class and the old statement is removed.
 
-It also analyzes Scrutor `Decorate(...)` chains and can enforce CI gates:
+CI gates:
 
-```powershell
-dotnet run --project .\tools\AutoWire.Migrator\AutoWire.Migrator.csproj -- `
-  --path . `
-  --fail-on-threshold `
-  --max-manual 0 `
-  --max-needs-review 5
+```bash
+autowire-migrate --path . --fail-on-threshold --max-manual 0 --max-needs-review 5
 ```
 
 ### CI parity report for registration manifests
 
 Generate a deterministic manifest diff report in CI:
 
-```powershell
-pwsh .\tools\compare-autowire-manifests.ps1 `
-  -Baseline .\baseline\autowire-registrations.txt `
-  -Candidate .\current\autowire-registrations.txt `
-  -ReportPath .\autowire-manifest-diff.md
+```bash
+autowire-migrate diff --baseline ./baseline/autowire-registrations.txt --candidate ./current/autowire-registrations.txt --report ./autowire-manifest-diff.md
 ```
 
-This report lists added/removed registrations so migration drift is explicit in PRs.
-
+This report lists added/removed registrations so migration drift is explicit in PRs. (`tools/compare-autowire-manifests.ps1` remains as a PowerShell equivalent.)
 ### Repeatable Scrutor vs AutoWire benchmark run
 
 ```powershell
@@ -1632,7 +1620,7 @@ Works with ASP.NET Core, Worker Services, MAUI, Blazor, console apps — any pro
 ## FAQ
 
 **Q: Can I use [DecorateScoped] with open generic types like IRepository<>?**
-Not currently — Microsoft.Extensions.DependencyInjection doesn't support factory-based registrations for open generic types, which is required for the decorator pattern. Decorators work with closed generic types (e.g. `[DecorateScoped(typeof(IRepository<Order>))]`). Register the inner concrete type explicitly for open-generic scenarios.
+Yes. Declare a generic decorator (`[DecorateScoped(typeof(IRepository<>))] class Logging<T> : IRepository<T>`). AutoWire closes it at build time over every closed registration of `IRepository<...>` (e.g. `OrderRepository : IRepository<Order>`) — no reflection. Open-generic registrations (`Repository<T>`) cannot be decorated; AW027 warns when nothing matched and AW021 when the decorator isn't generic in a mappable way.
 
 **Q: I'm getting AW004 — what is a captive dependency?**
 A captive dependency occurs when a Singleton holds a reference to a Scoped service. Since singletons live for the application's lifetime, the scoped service is never released when its scope ends. Fix it by injecting `IServiceScopeFactory` and creating a short-lived scope inside the method that needs the scoped service.

@@ -396,7 +396,7 @@ public class DiagnosticTests
     }
 
     [Fact]
-    public void AW025_ModuleAndProfile_EmitsWarning()
+    public void ModuleAndProfile_DoesNotEmitWarning()
     {
         var source = """
             public interface ICheckoutService { }
@@ -405,9 +405,8 @@ public class DiagnosticTests
             """;
 
         var diagnostics = RunGenerator(source);
-        Assert.Contains(diagnostics, d => d.Id == "AW025");
+        Assert.DoesNotContain(diagnostics, d => d.Id == "AW025");
     }
-
     // ── [HttpClient] generated code ───────────────────────────────────────────
 
     [Fact]
@@ -810,7 +809,48 @@ public class DiagnosticTests
     }
 
     [Fact]
-    public void AW021_OpenGenericDecoratorTarget_EmitsError()
+    public void AW021_OpenGenericDecoratorTarget_NonGenericDecorator_EmitsError()
+    {
+        var source = """
+            public class Order { }
+            public interface IRepository<T> { }
+            [AutoWire.Scoped]
+            public class OrderRepository : IRepository<Order> { }
+
+            [AutoWire.DecorateScoped(typeof(IRepository<>))]
+            public class OrderRepositoryDecorator : IRepository<Order>
+            {
+                public OrderRepositoryDecorator(IRepository<Order> inner) { }
+            }
+            """;
+
+        var diagnostics = RunGenerator(source);
+        Assert.Contains(diagnostics, d => d.Id == "AW021");
+    }
+
+    [Fact]
+    public void OpenGenericDecorator_WithClosedRegistration_DoesNotEmitAW021OrAW027()
+    {
+        var source = """
+            public class Order { }
+            public interface IRepository<T> { }
+            [AutoWire.Scoped]
+            public class OrderRepository : IRepository<Order> { }
+
+            [AutoWire.DecorateScoped(typeof(IRepository<>))]
+            public class RepositoryDecorator<T> : IRepository<T>
+            {
+                public RepositoryDecorator(IRepository<T> inner) { }
+            }
+            """;
+
+        var diagnostics = RunGenerator(source);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "AW021");
+        Assert.DoesNotContain(diagnostics, d => d.Id == "AW027");
+    }
+
+    [Fact]
+    public void AW027_OpenGenericDecorator_WithOnlyOpenRegistration_EmitsWarning()
     {
         var source = """
             public interface IRepository<T> { }
@@ -820,15 +860,13 @@ public class DiagnosticTests
             [AutoWire.DecorateScoped(typeof(IRepository<>))]
             public class RepositoryDecorator<T> : IRepository<T>
             {
-                private readonly IRepository<T> _inner;
-                public RepositoryDecorator(IRepository<T> inner) { _inner = inner; }
+                public RepositoryDecorator(IRepository<T> inner) { }
             }
             """;
 
         var diagnostics = RunGenerator(source);
-        Assert.Contains(diagnostics, d => d.Id == "AW021");
+        Assert.Contains(diagnostics, d => d.Id == "AW027");
     }
-
     // ── AW013: missing registration detection ─────────────────────────────────
 
     [Fact]

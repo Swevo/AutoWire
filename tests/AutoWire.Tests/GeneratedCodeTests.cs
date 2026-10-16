@@ -436,6 +436,58 @@ public class GeneratedCodeTests
         Assert.IsType<AutoWireTests.Scan.Sub.SubScanServiceX>(sub);
     }
 
+    [Fact]
+    public void ConventionScan_RegistersOpenGenericClasses()
+    {
+        using var provider = BuildProvider();
+        using var scope = provider.CreateScope();
+        var handler = scope.ServiceProvider.GetService<AutoWireTests.Scan.Generic.IScanHandler<int>>();
+        Assert.NotNull(handler);
+        Assert.Equal("handled:5", handler!.Handle(5));
+    }
+
+    // ── Open-generic decorators ───────────────────────────────────────────────
+
+    [Fact]
+    public void OpenGenericDecorator_WrapsEveryRegisteredClosedService()
+    {
+        using var provider = BuildProvider();
+        using var scope = provider.CreateScope();
+        Assert.Equal("logged(orders)", scope.ServiceProvider.GetRequiredService<IDecoratedRepository<DecoratedOrderEntity>>().Describe());
+        Assert.Equal("logged(customers)", scope.ServiceProvider.GetRequiredService<IDecoratedRepository<DecoratedCustomerEntity>>().Describe());
+    }
+
+    // ── Module + Profile gating ───────────────────────────────────────────────
+
+    [Fact]
+    public void ModuleProfile_NoProfile_RegistersOnlyUnprofiledModuleServices()
+    {
+        var services = new ServiceCollection();
+        services.AddBillingModule();
+        using var provider = services.BuildServiceProvider();
+        Assert.NotNull(provider.GetService<IBillingInvoiceService>());
+        Assert.Null(provider.GetService<IBillingVatService>());
+    }
+
+    [Fact]
+    public void ModuleProfile_MatchingProfile_RegistersProfiledModuleServices()
+    {
+        var services = new ServiceCollection();
+        services.AddBillingModule(profile: "eu");
+        using var provider = services.BuildServiceProvider();
+        Assert.NotNull(provider.GetService<IBillingInvoiceService>());
+        Assert.NotNull(provider.GetService<IBillingVatService>());
+    }
+
+    [Fact]
+    public void ModuleProfile_OtherProfile_SkipsProfiledModuleServices()
+    {
+        var services = new ServiceCollection();
+        services.AddBillingModule(profile: "us");
+        using var provider = services.BuildServiceProvider();
+        Assert.Null(provider.GetService<IBillingVatService>());
+    }
+
     // ── [Factory] tests ────────────────────────────────────────────────────────
 
     [Fact]

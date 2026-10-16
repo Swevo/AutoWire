@@ -27,3 +27,11 @@ namespace AutoWireTests.Scan.Sub
     // Sub-namespace is included by default (IncludeSubNamespaces = true)
     public class SubScanServiceX : ISubScanService { public string GetLabel() => "X"; }
 }
+
+namespace AutoWireTests.Scan.Generic
+{
+    public interface IScanHandler<T> { string Handle(T value); }
+
+    // Open generic class discovered by convention scanning
+    public class ScanHandler<T> : IScanHandler<T> { public string Handle(T value) => $"handled:{value}"; }
+}

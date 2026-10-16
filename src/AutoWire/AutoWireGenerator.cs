@@ -217,12 +217,12 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
 
     private static readonly DiagnosticDescriptor AW021OpenGenericDecoratorTarget = new(
         id: "AW021",
-        title: "Open generic decorator targets are not supported",
-        messageFormat: "Decorator '{0}' targets open generic service type '{1}'. AutoWire decorator generation currently supports closed service types only.",
+        title: "Open generic decorator cannot be closed over its service type",
+        messageFormat: "Decorator '{0}' targets open generic service type '{1}', but it is not a generic type that implements that service using only its own type parameters. Make the decorator generic (e.g. Decorator<T> : IService<T>) or decorate a closed service type.",
         category: "AutoWire",
         defaultSeverity: DiagnosticSeverity.Error,
         isEnabledByDefault: true,
-        description: "Use a closed service type in [DecorateScoped]/[DecorateSingleton]/[DecorateTransient], or decorate each closed specialization explicitly.");
+        description: "Open-generic decorators must be generic types whose type parameters all appear in the implemented service type, so AutoWire can close them over each registered closed service.");
 
     private static readonly DiagnosticDescriptor AW022InvalidRuntimeCondition = new(
         id: "AW022",
@@ -251,14 +251,14 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
         isEnabledByDefault: true,
         description: "Use a non-empty profile name, or remove Profile to make the registration always active.");
 
-    private static readonly DiagnosticDescriptor AW025ModuleProfileIgnored = new(
-        id: "AW025",
-        title: "Module registration profile is ignored",
-        messageFormat: "Registration '{0}' sets both Module='{1}' and Profile='{2}'. Module methods currently do not evaluate Profile, so this registration is always active when Add{1}Module() is called.",
+    private static readonly DiagnosticDescriptor AW027OpenDecoratorMatchesNothing = new(
+        id: "AW027",
+        title: "Open generic decorator matched no registered closed service",
+        messageFormat: "Open generic decorator '{0}' for '{1}' did not match any closed service registered through AutoWire, so it has no effect. Open-generic registrations (e.g. Repository<T>) cannot be decorated; register closed implementations or decorate a closed service type.",
         category: "AutoWire",
         defaultSeverity: DiagnosticSeverity.Warning,
         isEnabledByDefault: true,
-        description: "Use module methods for explicit grouping and profile methods for profile-based gating; avoid combining both on the same registration.");
+        description: "AutoWire closes an open generic decorator over every closed service registered through AutoWire that matches the service definition. None were found.");
 
     private static readonly DiagnosticDescriptor AW026ScrutorScanCanBeMigrated = new(
         id: "AW026",
@@ -942,6 +942,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
         RegisterCircularDependencyDiagnostics(context);
         RegisterUnusedRegistrationDiagnostics(context);
         RegisterManualRegistrationMigrationDiagnostics(context);
+        RegisterUnmatchedOpenDecoratorDiagnostics(context);
         RegisterScrutorMigrationDiagnostics(context);
         RegisterDependencyGraphExport(context);
 
@@ -1135,6 +1136,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                         if (attr.ConstructorArguments.Length == 0) continue;
                         if (attr.ConstructorArguments[0].Value is not ITypeSymbol serviceType) continue;
                         if (!IsOpenGenericDecoratorTarget(serviceType)) continue;
+                        if (TryGetOpenGenericDecoratorMap(classSymbol, serviceType, out var decoratorMap)) continue;
 
                         var loc = classSymbol.Locations.Length > 0 ? classSymbol.Locations[0] : Location.None;
                         return new DiagnosticInfo("AW021", loc, new[] { classSymbol.Name, serviceType.ToDisplayString() });
@@ -1329,7 +1331,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
         var results = ImmutableArray.CreateBuilder<DiagnosticInfo>();
         foreach (var type in GetAllNamedTypesInNamespace(compilation.Assembly.GlobalNamespace))
         {
-            if (type.IsAbstract || type.IsGenericType) continue;
+            if (type.IsAbstract) continue;
             if (TypeHasAutoWireAttribute(type, AutoWireExcludeFqn)) continue;
             if (HasAnyRegistrationAttribute(type)) continue;
 
@@ -1672,6 +1674,53 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             ctx.ReportDiagnostic(d.Create(AW011EmptyInterceptorInterface)));
     }
 
+    // ── AW027 helper ──────────────────────────────────────────────────────────
+
+    private static void RegisterUnmatchedOpenDecoratorDiagnostics(
+        IncrementalGeneratorInitializationContext context)
+    {
+        var unmatched = context.CompilationProvider
+            .Select(static (compilation, _) => FindUnmatchedOpenDecorators(compilation))
+            .SelectMany(static (arr, _) => arr);
+
+        context.RegisterSourceOutput(unmatched, static (ctx, d) =>
+            ctx.ReportDiagnostic(d.Create(AW027OpenDecoratorMatchesNothing)));
+    }
+
+    private static ImmutableArray<DiagnosticInfo> FindUnmatchedOpenDecorators(Compilation compilation)
+    {
+        var graph = BuildRegistrationGraphContext(compilation);
+        var results = ImmutableArray.CreateBuilder<DiagnosticInfo>();
+
+        foreach (var type in GetAllNamedTypesInNamespace(compilation.Assembly.GlobalNamespace))
+        {
+            if (type.IsAbstract) continue;
+
+            foreach (var attr in type.GetAttributes())
+            {
+                var lifetime = attr.AttributeClass?.ToDisplayString() switch
+                {
+                    DecorateScopedFqn => "Scoped",
+                    DecorateSingletonFqn => "Singleton",
+                    DecorateTransientFqn => "Transient",
+                    _ => null
+                };
+                if (lifetime is null) continue;
+                if (attr.ConstructorArguments.Length == 0) continue;
+                if (attr.ConstructorArguments[0].Value is not ITypeSymbol serviceType) continue;
+
+                var info = CreateDecoratorInfo(type, serviceType, lifetime, 0);
+                if (info is null || !info.IsOpenGeneric) continue;
+                if (!ExpandOpenGenericDecorators(ImmutableArray.Create(info), graph.Registrations).IsEmpty) continue;
+
+                var loc = type.Locations.Length > 0 ? type.Locations[0] : Location.None;
+                results.Add(new DiagnosticInfo("AW027", loc, new[] { type.Name, info.OpenServiceDefinition!.Replace("global::", "") }));
+            }
+        }
+
+        return results.ToImmutable();
+    }
+
     // ── AW013 helper ──────────────────────────────────────────────────────────
 
     private static void RegisterMissingRegistrationDiagnostics(
@@ -1789,7 +1838,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                     ctx.ServiceToConcreteMap[svc] = reg.ImplementationType;
 
         var decoratorGroups = new Dictionary<string, List<DecoratorInfo>>(StringComparer.Ordinal);
-        foreach (var dec in ctx.Decorators)
+        foreach (var dec in ExpandOpenGenericDecorators(ctx.Decorators.ToImmutableArray(), ctx.Registrations))
         {
             var key = dec.Lifetime + "::" + dec.ServiceType;
             if (!decoratorGroups.TryGetValue(key, out var list))
@@ -1828,6 +1877,8 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                 foreach (var param in ctor.Parameters)
                 {
                     if (IsFrameworkProvidedType(param.Type)) continue;
+                    if (param.Type is INamedTypeSymbol { IsGenericType: true } generic
+                        && generic.TypeArguments.Any(static a => a.TypeKind == TypeKind.TypeParameter)) continue;
                     if (IsRegisteredWithAutoWireGraph(param.Type, graph.RegisteredServiceTypes)) continue;
 
                     var loc = param.Locations.Length > 0
@@ -2316,11 +2367,160 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             if (namedArg.Key == "Order" && namedArg.Value.Value is int o)
                 order = o;
 
-        decorators.Add(new DecoratorInfo(
-            ToFullyQualified(classSymbol),
-            ToFullyQualified(serviceType),
+        var info = CreateDecoratorInfo(classSymbol, serviceType, lifetime, order);
+        if (info is not null)
+            decorators.Add(info);
+    }
+
+    /// <summary>
+    /// Builds a <see cref="DecoratorInfo"/>. Open-generic decorators (<c>typeof(IRepo&lt;&gt;)</c> on <c>Dec&lt;T&gt;</c>)
+    /// carry their definition and type-argument map so they can be closed over each registered closed service.
+    /// Returns null when an open-generic decorator cannot be mapped (reported as AW021).
+    /// </summary>
+    private static DecoratorInfo? CreateDecoratorInfo(
+        INamedTypeSymbol classSymbol,
+        ITypeSymbol serviceType,
+        string lifetime,
+        int order)
+    {
+        if (!IsOpenGenericDecoratorTarget(serviceType))
+            return new DecoratorInfo(ToFullyQualified(classSymbol), ToFullyQualified(serviceType), lifetime, order);
+
+        if (!TryGetOpenGenericDecoratorMap(classSymbol, serviceType, out var map) ||
+            serviceType is not INamedTypeSymbol namedService)
+            return null;
+
+        var serviceDefinition = ToFullyQualified(namedService.OriginalDefinition.ConstructUnboundGenericType());
+        var decoratorDefinition = ToFullyQualified(classSymbol.OriginalDefinition.ConstructUnboundGenericType());
+        return new DecoratorInfo(
+            decoratorDefinition,
+            serviceDefinition,
             lifetime,
-            order));
+            order,
+            serviceDefinition,
+            string.Join(",", map));
+    }
+
+    /// <summary>
+    /// Determines how the open-generic decorator's type parameters line up with the service's type arguments.
+    /// Succeeds only when the decorator is generic, implements the service definition with plain type parameters,
+    /// and every decorator type parameter appears in that implementation.
+    /// </summary>
+    private static bool TryGetOpenGenericDecoratorMap(
+        INamedTypeSymbol classSymbol,
+        ITypeSymbol serviceType,
+        out int[] map)
+    {
+        map = System.Array.Empty<int>();
+        if (!classSymbol.IsGenericType || serviceType is not INamedTypeSymbol namedService || !namedService.IsGenericType)
+            return false;
+
+        var definition = namedService.OriginalDefinition;
+        INamedTypeSymbol? implemented = null;
+        foreach (var iface in classSymbol.AllInterfaces)
+            if (SymbolEqualityComparer.Default.Equals(iface.OriginalDefinition, definition)) { implemented = iface; break; }
+
+        if (implemented is null)
+        {
+            for (var baseType = classSymbol.BaseType; baseType is not null; baseType = baseType.BaseType)
+                if (SymbolEqualityComparer.Default.Equals(baseType.OriginalDefinition, definition)) { implemented = baseType; break; }
+        }
+
+        if (implemented is null) return false;
+
+        var result = new int[classSymbol.TypeParameters.Length];
+        for (var i = 0; i < result.Length; i++)
+        {
+            result[i] = -1;
+            for (var j = 0; j < implemented.TypeArguments.Length; j++)
+            {
+                if (implemented.TypeArguments[j] is ITypeParameterSymbol tp &&
+                    SymbolEqualityComparer.Default.Equals(tp, classSymbol.TypeParameters[i]))
+                {
+                    result[i] = j;
+                    break;
+                }
+            }
+            if (result[i] < 0) return false;
+        }
+
+        map = result;
+        return true;
+    }
+
+    /// <summary>
+    /// Closes open-generic decorators over every closed service registered through AutoWire that matches the
+    /// decorator's service definition, so they flow through the same chain emitter as closed decorators.
+    /// </summary>
+    private static ImmutableArray<DecoratorInfo> ExpandOpenGenericDecorators(
+        ImmutableArray<DecoratorInfo> decorators,
+        IEnumerable<RegistrationInfo> registrations)
+    {
+        if (!decorators.Any(static d => d.IsOpenGeneric))
+            return decorators;
+
+        var closedServices = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var reg in registrations)
+        {
+            if (reg.KeyExpression is not null || reg.IsOpenGeneric) continue;
+            foreach (var svc in reg.ServiceTypes)
+                if (svc != reg.ImplementationType && seen.Add(svc))
+                    closedServices.Add(svc);
+        }
+
+        var result = ImmutableArray.CreateBuilder<DecoratorInfo>();
+        foreach (var dec in decorators)
+        {
+            if (!dec.IsOpenGeneric)
+            {
+                result.Add(dec);
+                continue;
+            }
+
+            var serviceDefinition = dec.OpenServiceDefinition!;
+            var openIndex = serviceDefinition.IndexOf('<');
+            if (openIndex < 0 || dec.ArgumentMap is null) continue;
+
+            var servicePrefix = serviceDefinition.Substring(0, openIndex + 1);
+            var serviceArity = serviceDefinition.Count(static c => c == ',') + 1;
+            var decoratorPrefix = dec.DecoratorType.Substring(0, dec.DecoratorType.IndexOf('<') + 1);
+            var map = dec.ArgumentMap.Split(',').Select(int.Parse).ToArray();
+
+            foreach (var closed in closedServices.OrderBy(static s => s, StringComparer.Ordinal))
+            {
+                if (!closed.StartsWith(servicePrefix, StringComparison.Ordinal) || !closed.EndsWith(">", StringComparison.Ordinal))
+                    continue;
+
+                var args = SplitTopLevelTypeArguments(closed.Substring(servicePrefix.Length, closed.Length - servicePrefix.Length - 1));
+                if (args.Count != serviceArity || map.Any(m => m >= args.Count)) continue;
+
+                var decoratorArgs = string.Join(", ", map.Select(m => args[m]));
+                result.Add(new DecoratorInfo($"{decoratorPrefix}{decoratorArgs}>", closed, dec.Lifetime, dec.Order));
+            }
+        }
+
+        return result.ToImmutable();
+    }
+
+    private static List<string> SplitTopLevelTypeArguments(string text)
+    {
+        var parts = new List<string>();
+        var depth = 0;
+        var start = 0;
+        for (var i = 0; i < text.Length; i++)
+        {
+            var c = text[i];
+            if (c == '<' || c == '(' || c == '[') depth++;
+            else if (c == '>' || c == ')' || c == ']') depth--;
+            else if (c == ',' && depth == 0)
+            {
+                parts.Add(text.Substring(start, i - start).Trim());
+                start = i + 1;
+            }
+        }
+        parts.Add(text.Substring(start).Trim());
+        return parts;
     }
 
     private static void AddFactoryRegistrations(
@@ -2653,7 +2853,6 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                          .OrderBy(static type => GetTypeSortKey(type), StringComparer.Ordinal))
             {
                 if (type.IsAbstract) continue;
-                if (type.IsGenericType) continue;
                 if (type.DeclaredAccessibility != Accessibility.Public) continue;
 
                 // For the current assembly, respect [AutoWireExclude] and explicit attributes
@@ -2679,6 +2878,38 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                     if (!matches) continue;
 
                     seenTypes.Add(typeFqn);
+
+                    if (type.IsGenericType)
+                    {
+                        // Open generic: register compatible generic interfaces (all type arguments are the class's own type parameters).
+                        var openServiceTypes = new List<string>();
+                        foreach (var iface in type.AllInterfaces)
+                        {
+                            var ifNs = iface.ContainingNamespace?.ToDisplayString() ?? string.Empty;
+                            if (IsSystemNamespace(ifNs)) continue;
+                            if (!iface.IsGenericType) continue;
+                            if (iface.TypeArguments.Any(static ta => ta is not ITypeParameterSymbol)) continue;
+                            openServiceTypes.Add(GetOpenGenericName(iface));
+                        }
+
+                        var openImpl = GetOpenGenericName(type);
+                        if (openServiceTypes.Count == 0)
+                            openServiceTypes.Add(openImpl);
+
+                        results.Add(new RegistrationInfo(
+                            openImpl,
+                            openServiceTypes.ToImmutableArray(),
+                            lifetime,
+                            keyExpression: null,
+                            isOpenGeneric: true,
+                            duplicateStrategy: DuplicateStrategy.Add,
+                            includeSelf: false,
+                            profile: null,
+                            isScanned: true,
+                            sourceLocation: type.Locations.Length > 0 ? type.Locations[0] : Location.None));
+
+                        break;
+                    }
 
                     var serviceTypes = new List<string>();
                     foreach (var iface in type.AllInterfaces)
@@ -2895,16 +3126,6 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                     reg.GetLocation(),
                     reg.ImplementationType.Replace("global::", "")));
             }
-
-            if (reg.Module is not null && reg.Profile is not null)
-            {
-                ctx.ReportDiagnostic(Diagnostic.Create(
-                    AW025ModuleProfileIgnored,
-                    reg.GetLocation(),
-                    reg.ImplementationType.Replace("global::", ""),
-                    reg.Module,
-                    reg.Profile));
-            }
         }
     }
 
@@ -2941,11 +3162,9 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                 if (namedArg.Key == "Order" && namedArg.Value.Value is int o)
                     order = o;
 
-            builder.Add(new DecoratorInfo(
-                ToFullyQualified(classSymbol),
-                ToFullyQualified(serviceType),
-                lifetime,
-                order));
+            var info = CreateDecoratorInfo(classSymbol, serviceType, lifetime, order);
+            if (info is not null)
+                builder.Add(info);
         }
         return builder.ToImmutable();
     }
@@ -3471,6 +3690,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
         string methodName,
         bool hasConfigurationType)
     {
+        decorators = ExpandOpenGenericDecorators(decorators, registrations);
         var sb = new StringBuilder();
         sb.AppendLine("// <auto-generated by AutoWire/>");
         sb.AppendLine("#nullable enable");
@@ -3778,48 +3998,48 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             var modName = kvp.Key;
             // Sanitise module name for use as a C# identifier
             var safeModName = new string(modName.Select(c => char.IsLetterOrDigit(c) ? c : '_').ToArray());
+            var hasProfileRegs = kvp.Value.Any(static r => r.Profile is not null);
             sb.AppendLine();
             sb.AppendLine($"    /// <summary>Registers the <b>{modName}</b> module services. Call this explicitly alongside <c>{methodName}()</c> or instead of it to selectively activate this module.</summary>");
             sb.AppendLine("    /// <param name=\"services\">The service collection to populate.</param>");
             if (hasConfigurationType)
                 sb.AppendLine("    /// <param name=\"configuration\">Optional configuration source used to resolve <c>ConfigKey</c>-driven lifetimes at runtime.</param>");
+            if (hasProfileRegs)
+                sb.AppendLine("    /// <param name=\"profile\">When provided, also registers module services whose <c>Profile</c> matches this value. Module services with no profile are always registered.</param>");
             AppendRegistrationRemarks(sb, kvp.Value);
             sb.AppendLine($"    public static global::Microsoft.Extensions.DependencyInjection.IServiceCollection Add{safeModName}Module(");
-            sb.AppendLine(hasConfigurationType
-                ? "        this global::Microsoft.Extensions.DependencyInjection.IServiceCollection services,"
-                : "        this global::Microsoft.Extensions.DependencyInjection.IServiceCollection services)");
+            var moduleParameters = new List<string>
+            {
+                "this global::Microsoft.Extensions.DependencyInjection.IServiceCollection services"
+            };
             if (hasConfigurationType)
-                sb.AppendLine("        global::Microsoft.Extensions.Configuration.IConfiguration? configuration = null)");
+                moduleParameters.Add("global::Microsoft.Extensions.Configuration.IConfiguration? configuration = null");
+            if (hasProfileRegs)
+                moduleParameters.Add("string? profile = null");
+            for (var p = 0; p < moduleParameters.Count; p++)
+                sb.AppendLine($"        {moduleParameters[p]}{(p == moduleParameters.Count - 1 ? ")" : ",")}");
             sb.AppendLine("    {");
 
-            foreach (var reg in kvp.Value
+            var orderedModuleRegs = kvp.Value
                 .OrderBy(static r => (int)r.DuplicateStrategy)
                 .ThenBy(static r => r.Lifetime)
-                .ThenBy(static r => r.ImplementationType))
+                .ThenBy(static r => r.ImplementationType)
+                .ToList();
+
+            foreach (var reg in orderedModuleRegs.Where(static r => r.Profile is null))
+                EmitModuleRegistration(sb, reg, hasConfigurationType, "        ");
+
+            foreach (var profileGroup in orderedModuleRegs
+                .Where(static r => r.Profile is not null)
+                .GroupBy(static r => r.Profile!, StringComparer.Ordinal)
+                .OrderBy(static g => g.Key, StringComparer.Ordinal))
             {
-                var runtimeKey = string.Empty;
-                var runtimeValue = string.Empty;
-                var useRuntimeCondition = hasConfigurationType
-                    && IsRuntimeCondition(reg.Condition)
-                    && TryParseRuntimeCondition(reg.Condition!, out runtimeKey, out runtimeValue);
-                var usePreprocessorCondition = reg.Condition is not null && !IsRuntimeCondition(reg.Condition);
-
-                if (usePreprocessorCondition) sb.AppendLine($"#if {reg.Condition}");
-                if (useRuntimeCondition) sb.AppendLine($"        if (global::System.StringComparer.OrdinalIgnoreCase.Equals(configuration?[\"{EscapeCSharpStringLiteral(runtimeKey)}\"], \"{EscapeCSharpStringLiteral(runtimeValue)}\"))");
-                if (useRuntimeCondition) sb.AppendLine("        {");
-                var runtimeIndent = useRuntimeCondition ? "            " : "        ";
-
-                foreach (var svc in reg.ServiceTypes)
-                {
-                    EmitLine(sb, reg, svc, hasConfigurationType, runtimeIndent);
-                    if (reg.IncludeLazy && !reg.IsOpenGeneric)
-                        sb.AppendLine($"{runtimeIndent}services.AddTransient<global::System.Lazy<{svc}>>(sp => new global::System.Lazy<{svc}>(() => sp.GetRequiredService<{svc}>()));");
-                }
-                if (reg.IncludeSelf && !reg.ServiceTypes.Contains(reg.ImplementationType))
-                    EmitLine(sb, reg, reg.ImplementationType, hasConfigurationType, runtimeIndent);
-
-                if (useRuntimeCondition) sb.AppendLine("        }");
-                if (usePreprocessorCondition) sb.AppendLine($"#endif");
+                sb.AppendLine();
+                sb.AppendLine($"        if (profile == \"{EscapeCSharpStringLiteral(profileGroup.Key)}\")");
+                sb.AppendLine("        {");
+                foreach (var reg in profileGroup)
+                    EmitModuleRegistration(sb, reg, hasConfigurationType, "            ");
+                sb.AppendLine("        }");
             }
 
             sb.AppendLine("        return services;");
@@ -3828,6 +4048,33 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
 
         sb.AppendLine("}");
         return sb.ToString();
+    }
+
+    private static void EmitModuleRegistration(StringBuilder sb, RegistrationInfo reg, bool hasConfigurationType, string baseIndent)
+    {
+        var runtimeKey = string.Empty;
+        var runtimeValue = string.Empty;
+        var useRuntimeCondition = hasConfigurationType
+            && IsRuntimeCondition(reg.Condition)
+            && TryParseRuntimeCondition(reg.Condition!, out runtimeKey, out runtimeValue);
+        var usePreprocessorCondition = reg.Condition is not null && !IsRuntimeCondition(reg.Condition);
+
+        if (usePreprocessorCondition) sb.AppendLine($"#if {reg.Condition}");
+        if (useRuntimeCondition) sb.AppendLine($"{baseIndent}if (global::System.StringComparer.OrdinalIgnoreCase.Equals(configuration?[\"{EscapeCSharpStringLiteral(runtimeKey)}\"], \"{EscapeCSharpStringLiteral(runtimeValue)}\"))");
+        if (useRuntimeCondition) sb.AppendLine($"{baseIndent}{{");
+        var runtimeIndent = useRuntimeCondition ? baseIndent + "    " : baseIndent;
+
+        foreach (var svc in reg.ServiceTypes)
+        {
+            EmitLine(sb, reg, svc, hasConfigurationType, runtimeIndent);
+            if (reg.IncludeLazy && !reg.IsOpenGeneric)
+                sb.AppendLine($"{runtimeIndent}services.AddTransient<global::System.Lazy<{svc}>>(sp => new global::System.Lazy<{svc}>(() => sp.GetRequiredService<{svc}>()));");
+        }
+        if (reg.IncludeSelf && !reg.ServiceTypes.Contains(reg.ImplementationType))
+            EmitLine(sb, reg, reg.ImplementationType, hasConfigurationType, runtimeIndent);
+
+        if (useRuntimeCondition) sb.AppendLine($"{baseIndent}}}");
+        if (usePreprocessorCondition) sb.AppendLine("#endif");
     }
 
     /// <summary>
@@ -3924,6 +4171,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
         ImmutableArray<FactoryInfo> factories,
         ImmutableArray<HttpClientInfo> httpClients)
     {
+        decorators = ExpandOpenGenericDecorators(decorators, registrations);
         var all = registrations;
         var scopedCount     = all.Count(static r => r.Lifetime == "Scoped");
         var singletonCount  = all.Count(static r => r.Lifetime == "Singleton");

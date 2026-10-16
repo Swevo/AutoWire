@@ -336,3 +336,41 @@ public class ConfigurableService : IConfigurableService
 {
     public Guid InstanceId { get; } = Guid.NewGuid();
 }
+
+// ── Open-generic decorators ───────────────────────────────────────────────────
+
+public class DecoratedOrderEntity { }
+public class DecoratedCustomerEntity { }
+
+public interface IDecoratedRepository<T> { string Describe(); }
+
+[Scoped]
+public class DecoratedOrderRepository : IDecoratedRepository<DecoratedOrderEntity>
+{
+    public string Describe() => "orders";
+}
+
+[Scoped]
+public class DecoratedCustomerRepository : IDecoratedRepository<DecoratedCustomerEntity>
+{
+    public string Describe() => "customers";
+}
+
+[DecorateScoped(typeof(IDecoratedRepository<>))]
+public class LoggingDecoratedRepository<T> : IDecoratedRepository<T>
+{
+    private readonly IDecoratedRepository<T> _inner;
+    public LoggingDecoratedRepository(IDecoratedRepository<T> inner) { _inner = inner; }
+    public string Describe() => $"logged({_inner.Describe()})";
+}
+
+// ── Module + Profile gating ───────────────────────────────────────────────────
+
+public interface IBillingInvoiceService { }
+public interface IBillingVatService { }
+
+[Scoped(Module = "Billing")]
+public class BillingInvoiceService : IBillingInvoiceService { }
+
+[Scoped(Module = "Billing", Profile = "eu")]
+public class BillingVatService : IBillingVatService { }
