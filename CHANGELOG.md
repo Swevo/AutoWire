@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.27.0] — Unreleased
+
+### Fixed
+- **Generator could silently fail to load on older toolchains.** `Microsoft.CodeAnalysis.CSharp` (and `.Workspaces` for the code fixes) were floating on `4.*`, so each build compiled against the newest Roslyn and users on an older SDK/Visual Studio got CS8032 and no `AddAutoWireServices()`. Now pinned to **4.8.0**: AutoWire supports the **.NET 8 SDK / Visual Studio 2022 17.8 or later**.
+- **Native AOT:** the generated `OverrideService<TService, TImplementation>()` test helper now annotates `TImplementation` with `[DynamicallyAccessedMembers(PublicConstructors)]`, removing an IL2087 trim warning in consuming projects.
+
+### Changed
+- Generated attributes (`[Scoped]`, `[Singleton]`, `[Transient]`, `[Try*]`, `[Decorate*]`, `[HostedService]`, `[Options]`, `[HttpClient]`, `[Validate]`, `[Interceptor]`, `[Endpoint]`, `[Factory]`, `[AutoWireScan]`, `[ScanAssembly]`, `[AutoWireExclude]`, `[AutoWireOptions]`) and `DuplicateStrategy` are now **`internal`**. Each project still gets its own copy, but they no longer clash (CS0436) when one AutoWire project references another. `[ScanAssembly]` is unaffected. `IAutoWireInterceptor` / `IAutoWireInvocation` stay public because user code exposes them. *Behaviour change:* code that referenced another assembly's AutoWire attribute types directly (e.g. `typeof(OtherAssembly's ScopedAttribute)`) must reference AutoWire itself.
+- Package is ~600 KB smaller: new 128×128 icon (4 KB, was 591 KB). Icon source in `assets/icon.svg`.
+- NuGet title, description and tags rewritten around what AutoWire uniquely offers (Native AOT, build-time DI validation, migration).
+- Samples reference the generator project directly instead of a stale package version.
+
+### CI
+- Tests run on net8.0, net9.0 and net10.0.
+- New `tests/AutoWire.PackageSmoke` consumes the packed `.nupkg`: built and run on the **.NET 8 SDK only** (proves the generator loads on the minimum supported toolchain) and published with **Native AOT** with warnings as errors (proves the AOT claim).
+- NuGet publish only runs when both smoke jobs pass; package-size guard catches accidental large files.
+
 ## [1.26.0] — 2026-10-16
 
 ### Added

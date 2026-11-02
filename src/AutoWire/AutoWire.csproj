@@ -13,11 +13,12 @@
     <NoWarn>$(NoWarn);NU5017;NU5128</NoWarn>
 
     <PackageId>AutoWire</PackageId>
-    <Version>1.26.0</Version>
+    <Version>1.27.0</Version>
+    <Title>AutoWire – compile-time DI registration (Native AOT-safe Scrutor alternative)</Title>
     <Authors>Justin Bannister</Authors>
     <Copyright>Copyright (c) 2025 Justin Bannister</Copyright>
-    <Description>Compile-time dependency injection auto-registration for .NET using Roslyn source generators. Add [Scoped], [Singleton], or [Transient] to your classes — AutoWire generates IServiceCollection registration code at build time. Zero runtime overhead, no reflection, no startup cost. Supports keyed services (.NET 8+) and works with ASP.NET Core, Worker Services, MAUI, and any Microsoft.Extensions.DependencyInjection project.</Description>
-    <PackageTags>dependency-injection;source-generator;di;iservicecollection;auto-register;roslyn;dotnet;aspnetcore;csharp;nuget;scoped;singleton;transient;compile-time;zero-reflection;keyed-services;worker-service;maui;di-registration;scrutor-alternative;polly</PackageTags>
+    <Description>Compile-time dependency injection registration for .NET: the Native AOT-safe alternative to Scrutor assembly scanning. Put [Scoped], [Singleton] or [Transient] on a class and AutoWire generates the IServiceCollection code at build time, with no reflection and no startup cost. It also checks your DI graph while you type: captive dependencies, circular dependencies, missing registrations and wrong service types become IDE squiggles with one-click fixes. Includes a migrator for existing Scrutor, Autofac and manual registrations. Requires the .NET 8 SDK (Visual Studio 2022 17.8) or later; works with any Microsoft.Extensions.DependencyInjection app.</Description>
+    <PackageTags>dependency-injection;di;source-generator;roslyn;iservicecollection;auto-registration;scrutor;scrutor-alternative;autofac-alternative;injectio-alternative;native-aot;aot;trimming;compile-time;zero-reflection;keyed-services;decorator;aspnetcore;worker-service;maui;analyzers</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <RepositoryUrl>https://github.com/Swevo/AutoWire</RepositoryUrl>
@@ -29,11 +30,11 @@
     <IncludeSymbols>false</IncludeSymbols>
     <Deterministic>true</Deterministic>
     <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
-    <PackageReleaseNotes>1.26.0: Open-generic decorators (AW027), open-generic convention scanning, Module+Profile gating (AW025 removed), AW021 narrowed, Swevo.AutoWire.Migrator dotnet tool with Autofac and Microsoft DI migration. 1.25.0: Add runtime Condition config gating syntax (config:Section:Key=Value and config:Section:Key), AW022/AW023 runtime-condition diagnostics, AW024/AW025 conditional-policy diagnostics, AW026 Scrutor Scan migration hints + code fix scaffold, AW019 keyed duplicate improvements with source locations, AW020/AW021 decorator hardening diagnostics, deterministic registration/decorator manifests (RegistrationManifestEntries, DecoratorManifestEntries, RegistrationManifestJson) including condition metadata, one-command Scrutor migration/report tooling, and Scrutor-to-AutoWire migration guidance. 1.24.0: Add startup diagnostics mode on AddAutoWireServices(diagnostics, diagnosticsSink) that emits RegistrationSummary counts and dependency graph text; add AW018 analyzer to suggest migrating manual services.AddScoped/AddSingleton/AddTransient(+TryAdd variants) to AutoWire attributes; add AW018 code fix that annotates implementation classes with the corresponding [AutoWire.*] attribute. 1.23.0: AW016 (circular dependency), AW017 (unused registration), AW013 code fix + allowlist expansion, Mermaid dependency graph export, ConfigKey runtime lifetime overrides, [Endpoint] minimal API mapping, OverrideService test helpers, generated-method hover docs. 1.22.0: [ScanAssembly] cross-assembly attributed-service scanning, AW014/AW015 diagnostics. 1.20.0: Code fix for AW010 (remove duplicate [Interceptor]). 1.19.0: Code fixes for AW002/AW004/AW008/AW011. 1.18.0: Multi-interface attributes ([Scoped(typeof(IFoo), typeof(IBar))]), AW011 (empty interceptor interface warning), [HttpClient] UseFactory mode (IHttpClientFactory). 1.17.0: AW010, IServiceScopeFactory code fix, HttpClient Timeout+DefaultHeaders. 1.16.0: AW009, [Validate], [Interceptor]. 1.15.0: Module, Resilience, AW008, RegistrationSummary. 1.14.0: AW007, [HttpClient], code fixes. 1.13.0: AW006, [Options], enum keys. 1.12.0: Condition/IncludeLazy. 1.11.0: [Factory]. 1.10.0: Convention scanning. 1.9.0: Profile. 1.8.0: Decorators ordered. 1.0.0: Initial.</PackageReleaseNotes>
+    <PackageReleaseNotes>1.27.0: Pinned Roslyn dependencies to 4.8.0 so the generator loads on every .NET 8+ SDK and Visual Studio 2022 17.8+ (previously it could silently fail to load on older toolchains). Generated AutoWire attributes and DuplicateStrategy are now internal, removing CS0436 type-conflict warnings in multi-project solutions. Smaller package (new 4 KB icon). Full history: https://github.com/Swevo/AutoWire/blob/master/CHANGELOG.md</PackageReleaseNotes>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.*" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.CodeAnalysis.Analyzers" Version="3.*" PrivateAssets="all">
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.8.0" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.CodeAnalysis.Analyzers" Version="3.11.0" PrivateAssets="all">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
     <PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.*" PrivateAssets="all">
