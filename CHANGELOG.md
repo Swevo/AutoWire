@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [1.27.0] — Unreleased
+## [1.27.0] — 2026-11-23
 
 ### Added
 - **`AutoWire.Templates`** template pack: `dotnet new install AutoWire.Templates` then `dotnet new autowire-webapi`.
