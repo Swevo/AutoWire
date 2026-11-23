@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Consumes the packed AutoWire .nupkg exactly like a real user would.
+    CI uses it to prove that (1) the generator loads on the oldest supported SDK (.NET 8)
+    and (2) the generated code publishes with Native AOT without trim/AOT warnings.
+    Not part of AutoWire.slnx on purpose: it needs the package to exist first.
+
+    Local run: see tests/AutoWire.PackageSmoke/README.md
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AutoWireVersion Condition="'$(AutoWireVersion)' == ''">0.0.0-local</AutoWireVersion>
+    <RestoreAdditionalProjectSources>$(MSBuildThisFileDirectory)..\..\nupkgs</RestoreAdditionalProjectSources>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="AutoWire" Version="$(AutoWireVersion)" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.1" />
+  </ItemGroup>
+</Project>

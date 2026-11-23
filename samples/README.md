@@ -48,5 +48,5 @@ Injects an AutoWire-registered `[Singleton]` into a Razor component.
 
 ## AutoWire.Sample.Maui - .NET MAUI
 
-Registers services and pages with `AddAutoWireServices()` in `MauiProgram`. Windows target only; requires `dotnet workload install maui-windows` and AutoWire 1.26.1+. Not part of the samples solution.
+Registers services and pages with `AddAutoWireServices()` in `MauiProgram`. Windows target only; requires `dotnet workload install maui-windows` and AutoWire 1.27.0+. Not part of the samples solution.
 

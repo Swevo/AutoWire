@@ -5,6 +5,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="AutoWire" Version="1.26.0" />
+    <!-- In your own app: <PackageReference Include="AutoWire" Version="1.27.0" /> -->
+    <!-- The samples reference the generator project directly so they always match the current source. -->
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\AutoWire\AutoWire.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
 </Project>

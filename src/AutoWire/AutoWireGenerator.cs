@@ -182,7 +182,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
     private static readonly DiagnosticDescriptor AW017UnusedRegistration = new(
         id: "AW017",
         title: "AutoWire registration appears unused",
-        messageFormat: "Service '{0}' is registered by AutoWire but does not appear to be used anywhere in this compilation.",
+        messageFormat: "Service '{0}' is registered by AutoWire but does not appear to be used anywhere in this compilation",
         category: "AutoWire",
         defaultSeverity: DiagnosticSeverity.Info,
         isEnabledByDefault: true,
@@ -191,7 +191,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
     private static readonly DiagnosticDescriptor AW018ManualRegistrationCanBeMigrated = new(
         id: "AW018",
         title: "Manual DI registration can be migrated to AutoWire",
-        messageFormat: "Manual registration '{0}' can be replaced with AutoWire: add '[AutoWire.{1}(typeof({2}))]' to '{3}' and remove this line.",
+        messageFormat: "Manual registration '{0}' can be replaced with AutoWire: add '[AutoWire.{1}(typeof({2}))]' to '{3}' and remove this line",
         category: "AutoWire",
         defaultSeverity: DiagnosticSeverity.Info,
         isEnabledByDefault: true,
@@ -278,7 +278,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
         namespace AutoWire
         {
             /// <summary>Controls how duplicate registrations for the same service type are handled.</summary>
-            public enum DuplicateStrategy
+            internal enum DuplicateStrategy
             {
                 /// <summary>Add the registration regardless of existing registrations (default). Last registration wins.</summary>
                 Add = 0,
@@ -290,7 +290,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
 
             /// <summary>Registers the decorated class as a <b>scoped</b> service via AutoWire source generation.</summary>
             [AttributeUsage(AttributeTargets.Class, AllowMultiple = true, Inherited = false)]
-            public sealed class ScopedAttribute : Attribute
+            internal sealed class ScopedAttribute : Attribute
             {
                 /// <summary>The explicit service type to register against. When null, all non-system interfaces are used.</summary>
                 public Type? ServiceType { get; }
@@ -324,7 +324,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                 }
             }
             [AttributeUsage(AttributeTargets.Class, AllowMultiple = true, Inherited = false)]
-            public sealed class SingletonAttribute : Attribute
+            internal sealed class SingletonAttribute : Attribute
             {
                 /// <summary>The explicit service type to register against. When null, all non-system interfaces are used.</summary>
                 public Type? ServiceType { get; }
@@ -360,7 +360,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
 
             /// <summary>Registers the decorated class as a <b>transient</b> service via AutoWire source generation.</summary>
             [AttributeUsage(AttributeTargets.Class, AllowMultiple = true, Inherited = false)]
-            public sealed class TransientAttribute : Attribute
+            internal sealed class TransientAttribute : Attribute
             {
                 /// <summary>The explicit service type to register against. When null, all non-system interfaces are used.</summary>
                 public Type? ServiceType { get; }
@@ -400,7 +400,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             /// Ideal for NuGet library authors who want to provide defaults without overriding consumer registrations.
             /// </summary>
             [AttributeUsage(AttributeTargets.Class, AllowMultiple = true, Inherited = false)]
-            public sealed class TryScopedAttribute : Attribute
+            internal sealed class TryScopedAttribute : Attribute
             {
                 /// <summary>The explicit service type to register against. When null, all non-system interfaces are used.</summary>
                 public Type? ServiceType { get; }
@@ -435,7 +435,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             /// Ideal for NuGet library authors who want to provide defaults without overriding consumer registrations.
             /// </summary>
             [AttributeUsage(AttributeTargets.Class, AllowMultiple = true, Inherited = false)]
-            public sealed class TrySingletonAttribute : Attribute
+            internal sealed class TrySingletonAttribute : Attribute
             {
                 /// <summary>The explicit service type to register against. When null, all non-system interfaces are used.</summary>
                 public Type? ServiceType { get; }
@@ -470,7 +470,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             /// Ideal for NuGet library authors who want to provide defaults without overriding consumer registrations.
             /// </summary>
             [AttributeUsage(AttributeTargets.Class, AllowMultiple = true, Inherited = false)]
-            public sealed class TryTransientAttribute : Attribute
+            internal sealed class TryTransientAttribute : Attribute
             {
                 /// <summary>The explicit service type to register against. When null, all non-system interfaces are used.</summary>
                 public Type? ServiceType { get; }
@@ -506,14 +506,14 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             /// or extend <c>Microsoft.Extensions.Hosting.BackgroundService</c>.
             /// </summary>
             [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
-            public sealed class HostedServiceAttribute : Attribute { }
+            internal sealed class HostedServiceAttribute : Attribute { }
 
             /// <summary>
             /// Wraps the existing <b>scoped</b> registration for <paramref name="serviceType"/> with this decorator class.
             /// The inner implementation is self-registered so that the decorator can be injected with the concrete type.
             /// </summary>
             [AttributeUsage(AttributeTargets.Class, AllowMultiple = true, Inherited = false)]
-            public sealed class DecorateScopedAttribute : Attribute
+            internal sealed class DecorateScopedAttribute : Attribute
             {
                 public Type ServiceType { get; }
                 /// <summary>Controls the order in which decorators are applied when multiple decorators target the same service type. Lower values are applied first (closer to the inner service). Default is 0.</summary>
@@ -523,7 +523,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
 
             /// <summary>Wraps the existing <b>singleton</b> registration for <paramref name="serviceType"/> with this decorator class.</summary>
             [AttributeUsage(AttributeTargets.Class, AllowMultiple = true, Inherited = false)]
-            public sealed class DecorateSingletonAttribute : Attribute
+            internal sealed class DecorateSingletonAttribute : Attribute
             {
                 public Type ServiceType { get; }
                 /// <summary>Controls the order in which decorators are applied when multiple decorators target the same service type. Lower values are applied first (closer to the inner service). Default is 0.</summary>
@@ -533,7 +533,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
 
             /// <summary>Wraps the existing <b>transient</b> registration for <paramref name="serviceType"/> with this decorator class.</summary>
             [AttributeUsage(AttributeTargets.Class, AllowMultiple = true, Inherited = false)]
-            public sealed class DecorateTransientAttribute : Attribute
+            internal sealed class DecorateTransientAttribute : Attribute
             {
                 public Type ServiceType { get; }
                 /// <summary>Controls the order in which decorators are applied when multiple decorators target the same service type. Lower values are applied first (closer to the inner service). Default is 0.</summary>
@@ -543,7 +543,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
 
             /// <summary>Assembly-level options for AutoWire source generation.</summary>
             [AttributeUsage(AttributeTargets.Assembly, AllowMultiple = false)]
-            public sealed class AutoWireOptionsAttribute : Attribute
+            internal sealed class AutoWireOptionsAttribute : Attribute
             {
                 /// <summary>
                 /// The name of the generated extension method. Defaults to <c>AddAutoWireServices</c>.
@@ -561,7 +561,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             /// </summary>
             /// <example>[assembly: AutoWire.ScanAssembly(typeof(MyApp.Core.MarkerType))]</example>
             [AttributeUsage(AttributeTargets.Assembly, AllowMultiple = true)]
-            public sealed class ScanAssemblyAttribute : Attribute
+            internal sealed class ScanAssemblyAttribute : Attribute
             {
                 /// <summary>A public marker type from the referenced assembly to scan.</summary>
                 public Type MarkerType { get; }
@@ -575,7 +575,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             /// </summary>
             /// <example>[assembly: AutoWire.AutoWireScan("MyApp.Services")]</example>
             [AttributeUsage(AttributeTargets.Assembly, AllowMultiple = true)]
-            public sealed class AutoWireScanAttribute : Attribute
+            internal sealed class AutoWireScanAttribute : Attribute
             {
                 /// <summary>The namespace to scan. Sub-namespaces are included by default.</summary>
                 public string Namespace { get; }
@@ -594,7 +594,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
 
             /// <summary>Opts this class out of convention-based scanning via <see cref="AutoWireScanAttribute"/>.</summary>
             [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
-            public sealed class AutoWireExcludeAttribute : Attribute { }
+            internal sealed class AutoWireExcludeAttribute : Attribute { }
 
             /// <summary>
             /// Generates options binding boilerplate for the decorated class:
@@ -607,7 +607,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             /// public class DatabaseOptions { ... }
             /// </example>
             [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
-            public sealed class OptionsAttribute : Attribute
+            internal sealed class OptionsAttribute : Attribute
             {
                 /// <summary>The configuration section key. When null, uses the class name (with "Options" suffix stripped if present).</summary>
                 public string? Section { get; }
@@ -635,7 +635,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             /// public class DbConnectionFactory { public IDbConnection Create() => ...; }
             /// </example>
             [AttributeUsage(AttributeTargets.Class, AllowMultiple = true, Inherited = false)]
-            public sealed class FactoryAttribute : Attribute
+            internal sealed class FactoryAttribute : Attribute
             {
                 /// <summary>The product type to register via the factory's <c>Create()</c> method.</summary>
                 public Type ServiceType { get; }
@@ -659,7 +659,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             /// public class GitHubClient { }
             /// </example>
             [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
-            public sealed class HttpClientAttribute : Attribute
+            internal sealed class HttpClientAttribute : Attribute
             {
                 /// <summary>Optional named-client name. When null the type name is used (typed client).</summary>
                 public string? Name { get; set; }
@@ -697,7 +697,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             /// // → services.AddScoped&lt;IValidator&lt;CreateOrderCommand&gt;, CreateOrderCommandValidator&gt;();
             /// </example>
             [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
-            public sealed class ValidateAttribute : Attribute { }
+            internal sealed class ValidateAttribute : Attribute { }
 
             /// <summary>
             /// Registers the decorated class as a compile-time interceptor for the specified service type.
@@ -717,7 +717,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             /// }
             /// </example>
             [AttributeUsage(AttributeTargets.Class, AllowMultiple = true, Inherited = false)]
-            public sealed class InterceptorAttribute : Attribute
+            internal sealed class InterceptorAttribute : Attribute
             {
                 /// <summary>The interface type to intercept. A compile-time proxy implementing this interface will be generated.</summary>
                 public Type ServiceType { get; }
@@ -762,7 +762,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             /// }
             /// </example>
             [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
-            public sealed class EndpointAttribute : Attribute
+            internal sealed class EndpointAttribute : Attribute
             {
                 /// <summary>The HTTP method, e.g. <c>"GET"</c>, <c>"POST"</c>, <c>"PUT"</c>, <c>"DELETE"</c>, <c>"PATCH"</c>. Any other value falls back to <c>MapMethods</c>.</summary>
                 public string Method { get; }
@@ -801,7 +801,12 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                 /// Removes any existing registrations for <typeparamref name="TService"/> and registers
                 /// <typeparamref name="TImplementation"/> in their place with the given <paramref name="lifetime"/>.
                 /// </summary>
-                public static IServiceCollection OverrideService<TService, TImplementation>(
+                public static IServiceCollection OverrideService<
+                    TService,
+        #if NET5_0_OR_GREATER
+                    [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors)]
+        #endif
+                    TImplementation>(
                     this IServiceCollection services,
                     ServiceLifetime lifetime = ServiceLifetime.Scoped)
                     where TService : class

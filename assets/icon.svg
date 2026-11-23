@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7B4DFF"/>
+      <stop offset="1" stop-color="#3A1C9E"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="512" height="512" rx="112" fill="url(#bg)"/>
+  <!-- [ ] = C# attribute; the wire joins a service to the container -->
+  <path d="M164 120 H112 V392 H164" fill="none" stroke="#FFFFFF" stroke-width="44" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M348 120 H400 V392 H348" fill="none" stroke="#FFFFFF" stroke-width="44" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M196 198 C 286 198, 226 314, 316 314" fill="none" stroke="#7CF2C8" stroke-width="44" stroke-linecap="round"/>
+  <circle cx="196" cy="198" r="46" fill="#FFFFFF"/>
+  <circle cx="316" cy="314" r="46" fill="#7CF2C8"/>
+</svg>
