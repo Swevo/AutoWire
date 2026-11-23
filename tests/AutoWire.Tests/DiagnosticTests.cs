@@ -999,6 +999,45 @@ public class DiagnosticTests
         Assert.Contains("services.AddScoped<global::External.Services.IExternalService, global::External.Services.ExternalService>();", code);
     }
 
+    // Base types from other assemblies can carry non-public interfaces (e.g. MAUI ContentPage). Emitting them breaks the build.
+    private const string BaseLibraryWithInternalInterfaces = """
+        namespace BaseLib
+        {
+            internal interface IHidden { }
+            internal interface IHiddenGeneric<T> { }
+            public interface IVisible { }
+            public interface IVisibleGeneric<T> { }
+            public class BasePage : IHidden, IVisible { }
+            public class GenericBase<T> : IHiddenGeneric<T>, IVisibleGeneric<T> { }
+        }
+        """;
+
+    [Theory]
+    [InlineData("""
+        namespace App { [AutoWire.Scoped] public class MyPage : BaseLib.BasePage { } }
+        """, "IVisible", "IHidden")]
+    [InlineData("""
+        [assembly: AutoWire.AutoWireScan("App")]
+        namespace App { public class MyPage : BaseLib.BasePage { } }
+        """, "IVisible", "IHidden")]
+    [InlineData("""
+        namespace App { [AutoWire.Scoped] public class MyRepo<T> : BaseLib.GenericBase<T> { } }
+        """, "IVisibleGeneric<>", "IHiddenGeneric")]
+    [InlineData("""
+        [assembly: AutoWire.AutoWireScan("App")]
+        namespace App { public class MyRepo<T> : BaseLib.GenericBase<T> { } }
+        """, "IVisibleGeneric<>", "IHiddenGeneric")]
+    public void Registration_SkipsNonPublicInterfacesInheritedFromOtherAssemblies(string source, string expected, string hidden)
+    {
+        var library = CreateReferencedAssembly("BaseLib", BaseLibraryWithInternalInterfaces);
+
+        var (_, sources) = RunGeneratorWithSources(source, library);
+        var code = sources.First(s => s.HintName.Contains("ServiceCollectionExtensions")).SourceText.ToString();
+
+        Assert.Contains("global::BaseLib." + expected, code);
+        Assert.DoesNotContain(hidden, code);
+    }
+
     [Fact]
     public void ScanAssembly_MultipleAssemblies_RegistersServicesFromEachReferencedAssembly()
     {

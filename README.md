@@ -19,7 +19,7 @@
 dotnet add package AutoWire
 ```
 
-Or start from a template: `dotnet new install ./templates/autowire-webapi` (from a clone of this repo), then `dotnet new autowire-webapi -n MyApp`.
+Or start from a template: `dotnet new install AutoWire.Templates`, then `dotnet new autowire-webapi -n MyApp`.
 
 ## Before and after
 

@@ -9,8 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.27.0] — Unreleased
 
+### Added
+- **`AutoWire.Templates`** template pack: `dotnet new install AutoWire.Templates` then `dotnet new autowire-webapi`.
+- Blazor Server and .NET MAUI samples, and a [migration guide](MIGRATION.md) for manual DI, Scrutor and Autofac.
+
 ### Fixed
-- Auto-registration no longer emits non-public interfaces inherited from base types in other assemblies (for example MAUI `ContentPage` internals), which broke compilation.
+- Auto-registration no longer emits non-public interfaces inherited from base types in other assemblies (for example MAUI `ContentPage` internals), which broke compilation. Applies to attributed and convention-scanned registrations, closed and open generic.
 - **Generator could silently fail to load on older toolchains.** `Microsoft.CodeAnalysis.CSharp` (and `.Workspaces` for the code fixes) were floating on `4.*`, so each build compiled against the newest Roslyn and users on an older SDK/Visual Studio got CS8032 and no `AddAutoWireServices()`. Now pinned to **4.8.0**: AutoWire supports the **.NET 8 SDK / Visual Studio 2022 17.8 or later**.
 - **Native AOT:** the generated `OverrideService<TService, TImplementation>()` test helper now annotates `TImplementation` with `[DynamicallyAccessedMembers(PublicConstructors)]`, removing an IL2087 trim warning in consuming projects.
 
@@ -24,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tests run on net8.0, net9.0 and net10.0.
 - New `tests/AutoWire.PackageSmoke` consumes the packed `.nupkg`: built and run on the **.NET 8 SDK only** (proves the generator loads on the minimum supported toolchain) and published with **Native AOT** with warnings as errors (proves the AOT claim).
 - NuGet publish only runs when both smoke jobs pass; package-size guard catches accidental large files.
+- Template pack is packed and published alongside the generator.
+- GitHub Actions bumped to Node 24 versions (checkout v7, setup-dotnet v6, upload-artifact v7, download-artifact v8, test-reporter v3).
 
 ## [1.26.0] — 2026-10-16
 

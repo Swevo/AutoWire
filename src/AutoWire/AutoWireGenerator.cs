@@ -2903,6 +2903,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                             var ifNs = iface.ContainingNamespace?.ToDisplayString() ?? string.Empty;
                             if (IsSystemNamespace(ifNs)) continue;
                             if (!iface.IsGenericType) continue;
+                            if (!IsAccessibleFrom(iface, type)) continue;
                             if (iface.TypeArguments.Any(static ta => ta is not ITypeParameterSymbol)) continue;
                             openServiceTypes.Add(GetOpenGenericName(iface));
                         }
@@ -3588,6 +3589,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                     var ns = iface.ContainingNamespace?.ToDisplayString() ?? string.Empty;
                     if (IsSystemNamespace(ns)) continue;
                     if (!iface.IsGenericType) continue;
+                    if (!IsAccessibleFrom(iface, classSymbol)) continue;
                     var compatible = true;
                     foreach (var ta in iface.TypeArguments)
                         if (ta is not ITypeParameterSymbol) { compatible = false; break; }

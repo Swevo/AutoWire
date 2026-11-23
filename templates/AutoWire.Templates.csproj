@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Template pack: dotnet new install AutoWire.Templates -->
+  <PropertyGroup>
+    <PackageType>Template</PackageType>
+    <PackageId>AutoWire.Templates</PackageId>
+    <Version>1.27.0</Version>
+    <Title>AutoWire project templates</Title>
+    <Authors>Justin Bannister</Authors>
+    <Copyright>Copyright (c) 2025 Justin Bannister</Copyright>
+    <Description>dotnet new templates for AutoWire, the compile-time, Native AOT-safe DI registration source generator. Includes autowire-webapi: a minimal API with AutoWire wired up.</Description>
+    <PackageTags>dotnet-new;templates;autowire;dependency-injection;source-generator;native-aot;aspnetcore</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageIcon>icon.png</PackageIcon>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageProjectUrl>https://github.com/Swevo/AutoWire</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/Swevo/AutoWire</RepositoryUrl>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <IncludeContentInPack>true</IncludeContentInPack>
+    <ContentTargetFolders>content</ContentTargetFolders>
+    <NoDefaultExcludes>true</NoDefaultExcludes>
+    <EnableDefaultItems>false</EnableDefaultItems>
+    <NoWarn>$(NoWarn);NU5128</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Content Include="autowire-webapi\**\*" Exclude="autowire-webapi\**\bin\**;autowire-webapi\**\obj\**;autowire-webapi\README.md" />
+    <None Include="..\icon.png" Pack="true" PackagePath="\" />
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>
