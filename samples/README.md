@@ -41,3 +41,12 @@ global using AutoWire;
 ```
 
 Or per-file: `using AutoWire;` in any file that calls `services.AddAutoWireServices()`.
+
+## AutoWire.Sample.Blazor - Blazor Server
+
+Injects an AutoWire-registered `[Singleton]` into a Razor component.
+
+## AutoWire.Sample.Maui - .NET MAUI
+
+Registers services and pages with `AddAutoWireServices()` in `MauiProgram`. Windows target only; requires `dotnet workload install maui-windows` and AutoWire 1.26.1+. Not part of the samples solution.
+

@@ -10,6 +10,22 @@
 
 **Zero runtime overhead. No reflection. No startup cost.**
 
+## Get started in 60 seconds
+
+```bash
+dotnet add package AutoWire
+```
+
+```csharp
+[Scoped] public class OrderService : IOrderService { }   // 1. annotate
+
+builder.Services.AddAutoWireServices();                  // 2. register once
+```
+
+That's it — no reflection, Native AOT safe. Or scaffold a project: `dotnet new install ./templates/autowire-webapi` then `dotnet new autowire-webapi -n MyApp`.
+
+Migrating from Scrutor, Autofac or manual `AddScoped` calls? See the [migration guide](MIGRATION.md).
+
 ### Benchmark — 20 services, AMD Ryzen 9 5900X, .NET 9
 
 | Method | Mean | vs Manual | Allocated |

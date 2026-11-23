@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.26.1]
+
+### Fixed
+- Auto-registration no longer emits interfaces inherited from base types in other assemblies that are not public (for example MAUI `ContentPage` internals), which broke compilation.
+
+---
+
 ## [1.26.0] — 2026-10-16
 
 ### Added

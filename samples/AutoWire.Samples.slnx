@@ -5,4 +5,7 @@
   <Folder Name="/Worker/">
     <Project Path="Worker/AutoWire.Sample.Worker.csproj" />
   </Folder>
+  <Folder Name="/Blazor/">
+    <Project Path="Blazor/AutoWire.Sample.Blazor.csproj" />
+  </Folder>
 </Solution>

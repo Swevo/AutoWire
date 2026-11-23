@@ -2695,6 +2695,16 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
         }
     }
 
+    // Interfaces inherited from base types in other assemblies may be non-public (e.g. MAUI internals).
+    private static bool IsAccessibleFrom(INamedTypeSymbol iface, INamedTypeSymbol consumer)
+    {
+        if (SymbolEqualityComparer.Default.Equals(iface.ContainingAssembly, consumer.ContainingAssembly))
+            return true;
+        for (ISymbol? s = iface; s is not null; s = s.ContainingType)
+            if (s.DeclaredAccessibility != Accessibility.Public) return false;
+        return true;
+    }
+
     private static bool ImplementsServiceType(INamedTypeSymbol classSymbol, ITypeSymbol serviceType)
     {
         // Self-registration
@@ -2916,6 +2926,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
                     {
                         var ifNs = iface.ContainingNamespace?.ToDisplayString() ?? string.Empty;
                         if (IsSystemNamespace(ifNs)) continue;
+                        if (!IsAccessibleFrom(iface, type)) continue;
                         serviceTypes.Add(iface.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat));
                     }
                     if (serviceTypes.Count == 0)
@@ -3618,6 +3629,7 @@ public sealed class AutoWireGenerator : IIncrementalGenerator
             {
                 var ns = iface.ContainingNamespace?.ToDisplayString() ?? string.Empty;
                 if (IsSystemNamespace(ns)) continue;
+                if (!IsAccessibleFrom(iface, classSymbol)) continue;
                 closedServiceTypes.Add(ToFullyQualified(iface));
             }
             if (closedServiceTypes.Count == 0)

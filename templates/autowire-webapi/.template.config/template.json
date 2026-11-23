@@ -1,0 +1,11 @@
+{
+  "$schema": "http://json.schemastore.org/template",
+  "author": "Justin Bannister",
+  "classifications": [ "Web", "API", "DI" ],
+  "identity": "Swevo.AutoWire.WebApi",
+  "name": "AutoWire Web API",
+  "shortName": "autowire-webapi",
+  "sourceName": "AutoWireApp",
+  "tags": { "language": "C#", "type": "project" },
+  "preferNameDirectory": true
+}
